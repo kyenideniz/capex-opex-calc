@@ -1,0 +1,6 @@
+{
+  "name": "Planisware CAPEX Maintenance",
+  "description": "Monthly manual maintenance of CAPEX external actuals in Planisware from SAP CJI3 Excel extracts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
