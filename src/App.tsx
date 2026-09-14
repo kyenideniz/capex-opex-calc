@@ -42,10 +42,16 @@ export default function App() {
 
   const initAppData = async () => {
     setIsLoading(true);
+    const fallbackUser: User = {
+      id: 'usr-pm-sarah',
+      name: 'Sarah Jenkins (PM)',
+      email: 'sarah.jenkins@company.com',
+      role: 'pm',
+    };
     try {
       const uList = await api.getUsers();
       setUsers(uList);
-      const defaultUser = uList.find((u) => u.id === 'usr-pm-sarah') || uList[0];
+      const defaultUser = uList.find((u) => u.id === 'usr-pm-sarah') || uList[0] || fallbackUser;
       setCurrentUser(defaultUser);
 
       const mList = await api.getAvailableMonths();
@@ -58,6 +64,7 @@ export default function App() {
       setProjects(pList);
     } catch (e) {
       console.error('Failed to initialize app data:', e);
+      setCurrentUser((prev) => prev || fallbackUser);
     } finally {
       setIsLoading(false);
     }
