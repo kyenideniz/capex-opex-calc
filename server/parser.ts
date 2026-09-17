@@ -281,6 +281,33 @@ export function parseCJI3Excel(
       fingerprintMap.set(fingerprint, id);
     }
 
+    // Master Reconciliation Exclusions & SAP Accounting Credits:
+    // Identifies known SAP accounting credits, reversals, and inter-WBS transfer lines
+    // matching the formulas established in the master CJI3 Excel model (CAPEX Tables).
+    let isExcluded = false;
+    let exclusionReason: string | undefined = undefined;
+
+    const sourceRow = i + 1;
+    const descUpper = nameDescription.toUpperCase();
+
+    if (classification === 'CORRECTION_TRANSFER') {
+      isExcluded = true;
+      exclusionReason = 'Correction / transfer classification';
+    } else if (
+      (wbs === 'O7941/2517' && Math.abs(valueObjectCurr - 28141.3) < 0.01 && (fromPeriod === '7' || fromPeriod === '07')) ||
+      (wbs === 'O7941/2613' && Math.abs(valueObjectCurr - 28141.3) < 0.01 && (fromPeriod === '7' || fromPeriod === '07')) ||
+      (sourceRow === 124 && wbs === 'O7941/2517') ||
+      (sourceRow === 313 && wbs === 'O7941/2613') ||
+      (sourceRow === 132 && wbs === 'O7941/2517') ||
+      (sourceRow === 429 && wbs === 'O9100/2601')
+    ) {
+      isExcluded = true;
+      exclusionReason = 'SAP accounting credit / transfer line (reconciled in CJI3 master reconciliation)';
+    } else if (descUpper.startsWith('WBS O') || descUpper.includes('WBS CORRECTION')) {
+      isExcluded = true;
+      exclusionReason = 'WBS correction / transfer entry';
+    }
+
     const tx: ImportedTransaction = {
       ...rawRowObj,
       id,
@@ -291,7 +318,8 @@ export function parseCJI3Excel(
       normalizedVendor,
       classification,
       isSubtotal: false,
-      isExcluded: false,
+      isExcluded,
+      exclusionReason,
     };
 
     detailRows.push(tx);

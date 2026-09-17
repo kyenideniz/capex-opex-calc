@@ -49,7 +49,8 @@ const initialAliases: VendorAlias[] = [
   { id: 'alias-2', rawPattern: 'PLANISWARE BELGIUM SR', canonicalVendor: 'PLANISWARE BELGIUM SRL', notes: 'Planisware local entity' },
   { id: 'alias-3', rawPattern: 'ERNST & YOUNG CONSUL', canonicalVendor: 'ERNST & YOUNG CONSULTING', notes: 'EY Consulting truncation' },
   { id: 'alias-4', rawPattern: 'ERNST & YOUNG CONSULTI', canonicalVendor: 'ERNST & YOUNG CONSULTING', notes: 'EY Consulting truncation 2' },
-  { id: 'alias-5', rawPattern: 'FLEXSO SUPPLY CHAI', canonicalVendor: 'FLEXSO SUPPLY CHAIN NV', notes: 'Flexso partner truncation' },
+  { id: 'alias-5', rawPattern: 'ERNST & YOUNG CONSULTIN', canonicalVendor: 'ERNST & YOUNG CONSULTING', notes: 'EY Consulting truncation 3' },
+  { id: 'alias-6', rawPattern: 'FLEXSO SUPPLY CHAI', canonicalVendor: 'FLEXSO SUPPLY CHAIN NV', notes: 'Flexso partner truncation' },
 ];
 
 class Store {
@@ -57,7 +58,7 @@ class Store {
 
   constructor() {
     this.db = this.loadDatabase();
-    if (this.db.snapshots.length === 0) {
+    if (this.db.snapshots.length === 0 || this.db.snapshots[0]?.filename?.includes('OPEX Sheets')) {
       this.seedInitialSnapshots();
     }
   }
@@ -221,9 +222,24 @@ class Store {
 
         const snapId = 'snap-source-excel-v1';
         const capexParsed = parseCJI3Excel(fileBuf, snapId, 'capex-export-CJI3.xlsx', this.db.vendorAliases, 'CAPEX CJI3');
-        const opexParsed = parseCJI3Excel(fileBuf, snapId, 'capex-export-CJI3.xlsx', this.db.vendorAliases, 'OPEX CJI3');
 
-        const allTransactions = [...capexParsed.detailRows, ...opexParsed.detailRows];
+        // Strictly use CAPEX CJI3 transactions for the CAPEX system
+        const allTransactions = capexParsed.detailRows;
+
+        // Extract accurate project budgets from CAPEX Tables if available
+        const budgetMap = new Map<string, number>();
+        if (wb.Sheets['CAPEX Tables']) {
+          const tableRows = XLSX.utils.sheet_to_json(wb.Sheets['CAPEX Tables'], { header: 1 }) as any[][];
+          for (let i = 6; i < tableRows.length; i++) {
+            const r = tableRows[i];
+            if (!r || !r[0]) continue;
+            const wbs = String(r[0]).trim();
+            const b = typeof r[14] === 'number' ? r[14] : parseFloat(r[14]);
+            if (wbs && !isNaN(b) && b > 0) {
+              budgetMap.set(wbs, b);
+            }
+          }
+        }
 
         // Unique WBS elements
         const wbsSet = new Map<string, string>();
@@ -240,7 +256,7 @@ class Store {
           name,
           assignedPmId: 'usr-pm-sarah',
           assignedPmName: 'Sarah Jenkins (PM)',
-          budgetEUR: 350000,
+          budgetEUR: budgetMap.get(wbs) || 350000,
         }));
 
         this.db.projects = projectList;
@@ -251,18 +267,18 @@ class Store {
           reportingMonth: '2026-09',
           version: 1,
           status: 'COMMITTED',
-          filename: 'capex-export-CJI3.xlsx (CAPEX & OPEX Sheets)',
+          filename: 'capex-export-CJI3.xlsx (CAPEX CJI3)',
           uploadedBy: 'usr-admin',
           uploadedAt: new Date().toISOString(),
-          totalRows: capexParsed.summary.totalRows + opexParsed.summary.totalRows,
+          totalRows: capexParsed.summary.totalRows,
           detailRowsCount: allTransactions.length,
-          subtotalRowsCount: capexParsed.summary.subtotalCount + opexParsed.summary.subtotalCount,
+          subtotalRowsCount: capexParsed.summary.subtotalCount,
           wbsCount: wbsSet.size,
-          vendorCount: capexParsed.summary.vendorCount + opexParsed.summary.vendorCount,
-          totalExternalSpend: capexParsed.summary.totalExternalSpend + opexParsed.summary.totalExternalSpend,
-          totalInternalReclass: capexParsed.summary.totalInternalReclass + opexParsed.summary.totalInternalReclass,
-          totalCorrectionTransfer: capexParsed.summary.totalCorrectionTransfer + opexParsed.summary.totalCorrectionTransfer,
-          totalOtherNonPo: capexParsed.summary.totalOtherNonPo + opexParsed.summary.totalOtherNonPo,
+          vendorCount: capexParsed.summary.vendorCount,
+          totalExternalSpend: capexParsed.summary.totalExternalSpend,
+          totalInternalReclass: capexParsed.summary.totalInternalReclass,
+          totalCorrectionTransfer: capexParsed.summary.totalCorrectionTransfer,
+          totalOtherNonPo: capexParsed.summary.totalOtherNonPo,
         };
 
         this.db.snapshots = [snapshot];

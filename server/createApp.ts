@@ -199,6 +199,7 @@ export function createExpressApp() {
       };
 
       db.snapshots.push(snapshot);
+      db.transactions = db.transactions.filter((t) => t.snapshotId !== snapshotId);
       db.transactions.push(...parsed.detailRows);
 
       db.auditLogs.unshift({
@@ -257,6 +258,7 @@ export function createExpressApp() {
       const m = getTransactionMonth(t);
       if (m) monthsSet.add(m);
     });
+    monthsSet.add('2026-09');
     if (monthsSet.size === 0) {
       ['2026-09', '2026-08', '2026-07', '2026-06', '2026-05', '2026-04', '2026-03', '2026-02', '2026-01', '2025-12', '2025-11', '2025-10', '2025-09'].forEach((m) => monthsSet.add(m));
     }

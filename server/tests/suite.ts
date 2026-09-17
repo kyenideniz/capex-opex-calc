@@ -463,5 +463,79 @@ export function runAllTests(): TestCaseResult[] {
     results.push({ id: 14, title: '14. External vendor totals reconcile exactly to sum of vendor rows', passed: false, message: e.message });
   }
 
+  // Test 15: TACOS 2689 (WBS O7941/2517) July 2026 Monthly Spend Reconciles to 10696.60 EUR
+  try {
+    const prevTx: ImportedTransaction[] = [
+      {
+        id: 'tx-prev',
+        snapshotId: 's1',
+        fingerprint: 'fp-prev',
+        wbs: 'O7941/2517',
+        normalizedWbs: 'O7941/2517',
+        purchasingDoc: 'PO1',
+        valueObjectCurr: 217088.19,
+        rawVendor: 'ERNST & YOUNG CONSULTING',
+        normalizedVendor: 'ERNST & YOUNG CONSULTING',
+        classification: 'EXTERNAL_VENDOR',
+        isSubtotal: false,
+        isExcluded: false,
+        sourceRow: 1,
+      },
+    ];
+
+    const currTx: ImportedTransaction[] = [
+      ...prevTx,
+      {
+        id: 'tx-july-1',
+        snapshotId: 's2',
+        fingerprint: 'fp-july-1',
+        wbs: 'O7941/2517',
+        normalizedWbs: 'O7941/2517',
+        purchasingDoc: 'PO1',
+        valueObjectCurr: 10696.60,
+        rawVendor: 'ERNST & YOUNG CONSULTING',
+        normalizedVendor: 'ERNST & YOUNG CONSULTING',
+        classification: 'EXTERNAL_VENDOR',
+        isSubtotal: false,
+        isExcluded: false,
+        refFiscalYear: '2026',
+        fromPeriod: '07',
+        sourceRow: 2,
+      },
+      // Excluded SAP adjustment credit
+      {
+        id: 'tx-july-excl',
+        snapshotId: 's2',
+        fingerprint: 'fp-july-excl',
+        wbs: 'O7941/2517',
+        normalizedWbs: 'O7941/2517',
+        purchasingDoc: '4791010583',
+        valueObjectCurr: 28141.30,
+        rawVendor: 'ERNST & YOUNG CONSULTING',
+        normalizedVendor: 'ERNST & YOUNG CONSULTING',
+        classification: 'EXTERNAL_VENDOR',
+        isSubtotal: false,
+        isExcluded: true,
+        exclusionReason: 'SAP accounting credit / transfer line',
+        refFiscalYear: '2026',
+        fromPeriod: '07',
+        sourceRow: 124,
+      },
+    ];
+
+    const { summary } = calculateWBSMonthlySummary('O7941/2517', '2026-07', currTx, prevTx);
+    const pass = Math.abs(summary.addThisMonth - 10696.60) < 0.01 && Math.abs(summary.newBalance - 227784.79) < 0.01;
+    results.push({
+      id: 15,
+      title: '15. Proof of Concept: TACOS 2689 (WBS O7941/2517) July 2026 spend reconciles to 10696.60 EUR',
+      passed: pass,
+      message: pass
+        ? `Passed: Previous Balance = 217,088.19 EUR | Add This Month = 10,696.60 EUR | New Balance = 227,784.79 EUR (Excluded row 124 of 28,141.30 EUR)`
+        : `Failed: Add This Month = ${summary.addThisMonth}, New Balance = ${summary.newBalance}`,
+    });
+  } catch (e: any) {
+    results.push({ id: 15, title: '15. Proof of Concept: TACOS 2689 (WBS O7941/2517) July 2026 spend reconciles to 10696.60 EUR', passed: false, message: e.message });
+  }
+
   return results;
 }
