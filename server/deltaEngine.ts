@@ -138,6 +138,38 @@ export function calculateWBSMonthlySummary(
       });
     }
 
+    // Extract document dates for this vendor in current reporting month
+    const monthTx = currTx.filter((t) => getTransactionMonth(t) === reportingMonth);
+    const dateObjs: Date[] = [];
+    monthTx.forEach((t) => {
+      const rawDate = t.docDate || t.postingDate;
+      if (rawDate) {
+        const d = new Date(rawDate);
+        if (!isNaN(d.getTime())) {
+          dateObjs.push(d);
+        }
+      }
+    });
+
+    let startDateStr: string | undefined;
+    let endDateStr: string | undefined;
+
+    if (dateObjs.length > 0) {
+      dateObjs.sort((a, b) => a.getTime() - b.getTime());
+      const minD = dateObjs[0];
+      const maxD = dateObjs[dateObjs.length - 1];
+
+      const formatD = (d: Date) => {
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = d.getFullYear();
+        return `${day}.${month}.${year}`;
+      };
+
+      startDateStr = formatD(minD);
+      endDateStr = formatD(maxD);
+    }
+
     // Show in vendor table if non-zero change or active
     vendorDeltas.push({
       vendor,
@@ -146,6 +178,8 @@ export function calculateWBSMonthlySummary(
       newBalance: currBal,
       status,
       transactionCount: currTx.length,
+      startDate: startDateStr,
+      endDate: endDateStr,
     });
   }
 

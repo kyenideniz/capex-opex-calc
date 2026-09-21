@@ -104,6 +104,8 @@ export interface VendorMonthlyDelta {
   newBalance: number;
   status: VendorEntryStatus;
   transactionCount: number;
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface WBSMonthlySummary {
