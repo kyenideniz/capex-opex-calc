@@ -65,9 +65,12 @@ export interface VendorAlias {
   createdAt?: string;
 }
 
+export type ProjectType = 'CAPEX' | 'OPEX';
+
 export interface Project {
   wbs: string;
   name: string;
+  projectType: ProjectType;
   assignedPmId?: string;
   assignedPmName?: string;
   budgetEUR?: number;
@@ -104,6 +107,8 @@ export interface VendorMonthlyDelta {
   newBalance: number;
   status: VendorEntryStatus;
   transactionCount: number;
+  prevStartDate?: string;
+  prevEndDate?: string;
   startDate?: string;
   endDate?: string;
 }
@@ -111,6 +116,11 @@ export interface VendorMonthlyDelta {
 export interface WBSMonthlySummary {
   wbs: string;
   projectName: string;
+  projectType: ProjectType;
+  sourceWbs?: string;
+  cutoffDate?: string;
+  trackerActual?: number;
+  variance?: number | string;
   reportingMonth: string;
   assignedPmId?: string;
   assignedPmName?: string;

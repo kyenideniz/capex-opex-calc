@@ -95,9 +95,12 @@ export function createExpressApp() {
       parsed.detailRows.forEach((tx) => {
         if (!existingWbs.has(tx.normalizedWbs)) {
           existingWbs.add(tx.normalizedWbs);
+          const isOpex = tx.normalizedWbs.startsWith('C') || tx.normalizedWbs.startsWith('C7941/');
+          const projectType = isOpex ? 'OPEX' : 'CAPEX';
           db.projects.push({
             wbs: tx.normalizedWbs,
-            name: `Project ${tx.normalizedWbs}`,
+            name: `${projectType} Project ${tx.normalizedWbs}`,
+            projectType,
             assignedPmId: 'usr-pm-sarah',
             assignedPmName: 'Sarah Jenkins (PM)',
             budgetEUR: 200000,
@@ -169,9 +172,12 @@ export function createExpressApp() {
       parsed.detailRows.forEach((tx) => {
         if (!existingWbs.has(tx.normalizedWbs)) {
           existingWbs.add(tx.normalizedWbs);
+          const isOpex = tx.normalizedWbs.startsWith('C') || tx.normalizedWbs.startsWith('C7941/');
+          const projectType = isOpex ? 'OPEX' : 'CAPEX';
           db.projects.push({
             wbs: tx.normalizedWbs,
-            name: `Project ${tx.normalizedWbs}`,
+            name: `${projectType} Project ${tx.normalizedWbs}`,
+            projectType,
             assignedPmId: 'usr-pm-sarah',
             assignedPmName: 'Sarah Jenkins (PM)',
             budgetEUR: 250000,

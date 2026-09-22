@@ -1,17 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User, WBSMonthlySummary } from '../types';
 import { PlaniswareView } from './PlaniswareView';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Download,
   ExternalLink,
+  FileUp,
   HelpCircle,
   Info,
   Layers,
   MessageSquare,
+  Search,
   ShieldAlert,
+  X,
 } from 'lucide-react';
 
 interface PMScreenProps {
@@ -53,7 +58,13 @@ export const PMScreen: React.FC<PMScreenProps> = ({
   const [planiswareRef, setPlaniswareRef] = useState('');
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [wbsSearchTerm, setWbsSearchTerm] = useState('');
+
+  // Search & Combobox State
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchDropdownRef = useRef<HTMLDivElement>(null);
 
   // Active summary
   const activeSummary = summaries.find((s) => s.wbs === selectedWbs) || summaries[0];
@@ -75,11 +86,73 @@ export const PMScreen: React.FC<PMScreenProps> = ({
   ];
 
   // Filtered summaries for search
-  const filteredSummaries = summaries.filter(
-    (s) =>
-      s.wbs.toLowerCase().includes(wbsSearchTerm.toLowerCase()) ||
-      s.projectName.toLowerCase().includes(wbsSearchTerm.toLowerCase())
-  );
+  const filteredSummaries = searchTerm.trim() === ''
+    ? summaries
+    : summaries.filter(
+        (s) =>
+          s.wbs.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          s.projectName.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+
+  // Reset highlighted item when search term changes
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [searchTerm]);
+
+  // Click outside to close dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        searchDropdownRef.current &&
+        !searchDropdownRef.current.contains(e.target as Node)
+      ) {
+        setIsSearchOpen(false);
+        setSearchTerm('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSelectProject = (wbs: string) => {
+    onSelectWbs(wbs);
+    setIsSearchOpen(false);
+    setSearchTerm('');
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!isSearchOpen) {
+        setIsSearchOpen(true);
+      } else {
+        setHighlightedIndex((prev) =>
+          prev < filteredSummaries.length - 1 ? prev + 1 : 0
+        );
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!isSearchOpen) {
+        setIsSearchOpen(true);
+      } else {
+        setHighlightedIndex((prev) =>
+          prev > 0 ? prev - 1 : filteredSummaries.length - 1
+        );
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredSummaries.length > 0) {
+        const target = filteredSummaries[highlightedIndex] || filteredSummaries[0];
+        if (target) {
+          handleSelectProject(target.wbs);
+        }
+      }
+    } else if (e.key === 'Escape') {
+      setIsSearchOpen(false);
+      setSearchTerm('');
+      searchInputRef.current?.blur();
+    }
+  };
 
   if (!activeSummary) {
     return (
@@ -202,76 +275,171 @@ export const PMScreen: React.FC<PMScreenProps> = ({
               </select>
             </div>
 
-            {/* Upload File / Extract Button */}
+            {/* Upload File / WBS Code Reference Button */}
             <button
               onClick={onOpenUploadModal}
-              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5"
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+              title="Copy WBS codes for Excel or load SAP CJI3 source files"
             >
-              <Download className="w-3.5 h-3.5 rotate-180" />
-              <span>Upload / Load CJI3</span>
+              <FileUp className="w-3.5 h-3.5" />
+              <span>WBS Reference & Upload</span>
             </button>
           </div>
         </div>
 
-        {/* WBS Selection & Search Bar */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="md:col-span-1">
-            <label className="block text-xs font-bold text-slate-700 mb-1">Search WBS / Project Name</label>
+        {/* Unified Search & Select WBS Combobox */}
+        <div ref={searchDropdownRef} className="relative">
+          <div className="flex justify-between items-center mb-1.5">
+            <label htmlFor="wbs-search-select" className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <span>Select or Search WBS Element</span>
+              <span className="text-[11px] font-normal text-slate-400">
+                (Type WBS code, press Enter or click to choose)
+              </span>
+            </label>
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={onExportExcel}
+                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 font-semibold text-[11px] rounded-lg border border-slate-200 shadow-2xs transition flex items-center space-x-1"
+                title="Export current reconciliation to Excel"
+              >
+                <Download className="w-3 h-3 text-slate-500" />
+                <span>Export Excel</span>
+              </button>
+              <span className="text-[11px] text-slate-500 font-medium">
+                {summaries.length} available projects
+              </span>
+            </div>
+          </div>
+
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+              <Search className="w-4 h-4" />
+            </div>
+
             <input
+              id="wbs-search-select"
+              ref={searchInputRef}
               type="text"
-              placeholder="Search WBS code..."
-              value={wbsSearchTerm}
-              onChange={(e) => setWbsSearchTerm(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              autoComplete="off"
+              value={isSearchOpen ? searchTerm : activeSummary.wbs}
+              placeholder="Type WBS code (e.g. C7941/2036 or O7941/2519)..."
+              onFocus={() => {
+                setIsSearchOpen(true);
+                setSearchTerm('');
+              }}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                if (!isSearchOpen) setIsSearchOpen(true);
+              }}
+              onKeyDown={handleInputKeyDown}
+              className={`w-full pl-10 pr-20 py-2.5 bg-slate-50 hover:bg-slate-100/70 focus:bg-white text-slate-900 border rounded-xl text-xs font-bold transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-text ${
+                isSearchOpen ? 'border-blue-400 ring-2 ring-blue-500/20' : 'border-slate-300'
+              }`}
             />
-          </div>
 
-          <div className="md:col-span-2">
-            <div className="flex justify-between items-center mb-1">
-              <label htmlFor="wbs-select" className="text-xs font-bold text-slate-700">
-                Select Project WBS Element ({filteredSummaries.length} available)
-              </label>
+            <div className="absolute inset-y-0 right-0 pr-2 flex items-center space-x-1">
+              {isSearchOpen && searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchTerm('');
+                    searchInputRef.current?.focus();
+                  }}
+                  className="p-1 hover:bg-slate-200 text-slate-400 hover:text-slate-600 rounded-lg transition cursor-pointer"
+                  title="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (isSearchOpen) {
+                    setIsSearchOpen(false);
+                    setSearchTerm('');
+                  } else {
+                    setIsSearchOpen(true);
+                    searchInputRef.current?.focus();
+                  }
+                }}
+                className="p-1.5 hover:bg-slate-200 text-slate-500 rounded-lg transition cursor-pointer"
+                title={isSearchOpen ? "Close menu" : "Open projects menu"}
+              >
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isSearchOpen ? 'rotate-180 text-blue-600' : ''}`} />
+              </button>
             </div>
-            <select
-              id="wbs-select"
-              value={activeSummary.wbs}
-              onChange={(e) => onSelectWbs(e.target.value)}
-              className="w-full bg-slate-50 text-slate-900 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
-            >
-              {filteredSummaries.map((s) => (
-                <option key={s.wbs} value={s.wbs}>
-                  {s.wbs} — {s.projectName}
-                </option>
-              ))}
-            </select>
           </div>
-        </div>
 
-        {/* Active Selected WBS Status Bar */}
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center space-x-3">
-            <span className="font-mono bg-white px-2.5 py-1 rounded-lg text-slate-900 font-bold text-xs border border-slate-200 shadow-2xs">
-              {activeSummary.wbs}
-            </span>
-            <div>
-              <span className="text-xs font-bold text-slate-900 block">{activeSummary.projectName}</span>
-              <span className="text-[11px] text-slate-500">Assigned PM: {activeSummary.assignedPmName || 'Unassigned'}</span>
+          {/* Floating Dropdown Results Menu */}
+          {isSearchOpen && (
+            <div className="absolute z-40 left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-72 overflow-y-auto">
+              {filteredSummaries.length > 0 ? (
+                <div className="p-1 space-y-0.5">
+                  <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider bg-slate-50/80 border-b border-slate-100 flex justify-between items-center">
+                    <span>{filteredSummaries.length} project(s)</span>
+                    <span className="text-[10px] text-slate-400 font-normal">Press Enter ↵ to select</span>
+                  </div>
+
+                  {filteredSummaries.map((s, idx) => {
+                    const isSelected = s.wbs === activeSummary.wbs;
+                    const isHighlighted = idx === highlightedIndex;
+                    const isOpex = s.projectType === 'OPEX' || s.wbs.startsWith('C') || s.wbs.startsWith('C7941/');
+
+                    return (
+                      <div
+                        key={s.wbs}
+                        onClick={() => handleSelectProject(s.wbs)}
+                        onMouseEnter={() => setHighlightedIndex(idx)}
+                        className={`px-3 py-2 rounded-lg cursor-pointer transition flex items-center justify-between gap-3 text-xs ${
+                          isHighlighted
+                            ? 'bg-blue-50 text-blue-900 font-semibold'
+                            : isSelected
+                            ? 'bg-slate-100 font-semibold text-slate-900'
+                            : 'hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5 truncate">
+                          <span
+                            className={`text-[10px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded border ${
+                              isOpex
+                                ? 'bg-purple-100 text-purple-800 border-purple-200'
+                                : 'bg-blue-100 text-blue-800 border-blue-200'
+                            }`}
+                          >
+                            {isOpex ? 'OPEX' : 'CAPEX'}
+                          </span>
+                          <span className={`font-mono text-xs px-2 py-0.5 rounded border ${
+                            isSelected || isHighlighted
+                              ? 'bg-blue-100/80 border-blue-300 text-blue-800 font-bold'
+                              : 'bg-slate-100 border-slate-200 text-slate-800 font-semibold'
+                          }`}>
+                            {s.wbs}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center space-x-2 flex-shrink-0">
+                          <span className={`text-[11px] font-bold ${
+                            s.addThisMonth > 0 ? 'text-blue-700' : s.addThisMonth < 0 ? 'text-amber-700' : 'text-slate-400'
+                          }`}>
+                            {s.addThisMonth > 0 ? `+${formatEUR(s.addThisMonth)}` : formatEUR(s.addThisMonth)}
+                          </span>
+                          {isSelected && (
+                            <Check className="w-3.5 h-3.5 text-blue-600 stroke-[2.5]" />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="py-6 px-4 text-center text-xs text-slate-500 space-y-1">
+                  <p className="font-semibold text-slate-700">No projects matching "{searchTerm}"</p>
+                  <p className="text-[11px] text-slate-400">Try searching with a partial WBS number (e.g. "C7941/2036" or "2519")</p>
+                </div>
+              )}
             </div>
-          </div>
-
-          <div className="flex items-center space-x-3">
-            {getStatusBadge(activeSummary.processingStatus)}
-
-            <button
-              onClick={onExportExcel}
-              className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs rounded-lg border border-slate-200 shadow-2xs transition flex items-center space-x-1"
-            >
-              <Download className="w-3.5 h-3.5 text-slate-500" />
-              <span>Export Excel</span>
-            </button>
-          </div>
+          )}
         </div>
-
       </div>
 
       {/* Warnings Banner if any */}

@@ -2,10 +2,12 @@ import {
   ImportedTransaction,
   MonthCloseConfirmation,
   Project,
+  ProjectType,
   ReviewWarning,
   VendorMonthlyDelta,
   WBSMonthlySummary,
 } from '../src/types.js';
+import { includeManualCapex } from './parser.js';
 
 export function getTransactionMonth(t: ImportedTransaction): string {
   if (t.refFiscalYear && t.fromPeriod) {
@@ -36,23 +38,45 @@ export function calculateWBSMonthlySummary(
 ): { summary: WBSMonthlySummary; warnings: ReviewWarning[] } {
   const warnings: ReviewWarning[] = [];
 
+  const isOpex = wbs.startsWith('C') || wbs.startsWith('C7941/') || project?.projectType === 'OPEX';
+  const projectType: ProjectType = isOpex ? 'OPEX' : 'CAPEX';
+  const sourceWbs = isOpex ? (wbs.endsWith('/2/2') ? wbs : `${wbs}/2/2`) : wbs;
+  const cutoffDate = '2026-09-05';
+
+  // Transaction filter predicate based on project type
+  const filterTx = (t: ImportedTransaction) => {
+    if (t.isExcluded || t.userOverride?.isExcluded) return false;
+
+    if (isOpex) {
+      // OPEX logic: Match sourceWbs or base wbs with document date present
+      const matchesWbs = t.normalizedWbs === sourceWbs || t.normalizedWbs === wbs;
+      const hasDate = Boolean((t.docDate || '').trim() || (t.postingDate || '').trim());
+      if (!matchesWbs || !hasDate) return false;
+
+      // Filter by cutoff date if present
+      if (cutoffDate) {
+        const dStr = t.docDate || t.postingDate;
+        if (dStr) {
+          const txTime = new Date(dStr).getTime();
+          const cutoffTime = new Date(cutoffDate).getTime();
+          if (!isNaN(txTime) && !isNaN(cutoffTime) && txTime > cutoffTime) {
+            return false;
+          }
+        }
+      }
+      return true;
+    } else {
+      // CAPEX logic: Match project code directly using includeManualCapex
+      if (t.normalizedWbs !== wbs && t.wbs !== wbs) return false;
+      return includeManualCapex(t);
+    }
+  };
+
   // Filter current active valid external transactions for this WBS
-  const currentExternalTx = currentTxList.filter(
-    (t) =>
-      t.normalizedWbs === wbs &&
-      t.classification === 'EXTERNAL_VENDOR' &&
-      !t.isExcluded &&
-      !(t.userOverride?.isExcluded)
-  );
+  const currentExternalTx = currentTxList.filter(filterTx);
 
   // Filter previous active valid external transactions for this WBS
-  const previousExternalTx = previousTxList.filter(
-    (t) =>
-      t.normalizedWbs === wbs &&
-      t.classification === 'EXTERNAL_VENDOR' &&
-      !t.isExcluded &&
-      !(t.userOverride?.isExcluded)
-  );
+  const previousExternalTx = previousTxList.filter(filterTx);
 
   // Internal reclass, correction, and other non-PO totals for current month specifically
   const currentInternalReclass = currentTxList
@@ -85,19 +109,32 @@ export function calculateWBSMonthlySummary(
     )
     .reduce((sum, t) => sum + t.valueObjectCurr, 0);
 
-  // Get set of all vendors across previous and current for this WBS
-  const vendorSet = new Set<string>();
-  currentExternalTx.forEach((t) => vendorSet.add(t.normalizedVendor));
-  previousExternalTx.forEach((t) => vendorSet.add(t.normalizedVendor));
+  // Map uppercase key to canonical display name
+  const vendorCanonicalMap = new Map<string, string>();
+
+  [...currentExternalTx, ...previousExternalTx].forEach((t) => {
+    const raw = (t.normalizedVendor || '').trim();
+    if (!raw) return;
+    const key = raw.toUpperCase();
+    if (!vendorCanonicalMap.has(key)) {
+      vendorCanonicalMap.set(key, raw);
+    } else {
+      // Prefer Title Case / mixed case over all-lowercase if available
+      const existing = vendorCanonicalMap.get(key)!;
+      if (existing === existing.toLowerCase() && raw !== raw.toLowerCase()) {
+        vendorCanonicalMap.set(key, raw);
+      }
+    }
+  });
 
   const vendorDeltas: VendorMonthlyDelta[] = [];
 
   let totalPrevBalance = 0;
   let totalCurrBalance = 0;
 
-  for (const vendor of vendorSet) {
-    const prevTx = previousExternalTx.filter((t) => t.normalizedVendor === vendor);
-    const currTx = currentExternalTx.filter((t) => t.normalizedVendor === vendor);
+  for (const [key, vendorDisplay] of vendorCanonicalMap.entries()) {
+    const prevTx = previousExternalTx.filter((t) => (t.normalizedVendor || '').toUpperCase() === key);
+    const currTx = currentExternalTx.filter((t) => (t.normalizedVendor || '').toUpperCase() === key);
 
     const prevBal = prevTx.reduce((sum, t) => sum + t.valueObjectCurr, 0);
     const currBal = currTx.reduce((sum, t) => sum + t.valueObjectCurr, 0);
@@ -115,38 +152,67 @@ export function calculateWBSMonthlySummary(
     } else if (addThisMonth < 0) {
       status = 'Review';
       warnings.push({
-        id: `warn-neg-${wbs}-${vendor}-${reportingMonth}`,
+        id: `warn-neg-${wbs}-${vendorDisplay}-${reportingMonth}`,
         snapshotId: '',
         wbs,
-        vendor,
+        vendor: vendorDisplay,
         severity: 'warning',
         type: 'NEGATIVE_ADDITION',
-        message: `WBS ${wbs} / Vendor ${vendor}: Negative monthly addition (EUR ${addThisMonth.toFixed(2)}). Reversal or credit note.`,
+        message: `WBS ${wbs} / Vendor ${vendorDisplay}: Negative monthly addition (EUR ${addThisMonth.toFixed(2)}). Reversal or credit note.`,
       });
     }
 
     // Check if new vendor
     if (prevBal === 0 && currBal > 0) {
       warnings.push({
-        id: `warn-newvend-${wbs}-${vendor}`,
+        id: `warn-newvend-${wbs}-${vendorDisplay}`,
         snapshotId: '',
         wbs,
-        vendor,
+        vendor: vendorDisplay,
         severity: 'info',
         type: 'NEW_VENDOR',
-        message: `WBS ${wbs}: New vendor "${vendor}" appeared in reporting month ${reportingMonth}.`,
+        message: `WBS ${wbs}: New vendor "${vendorDisplay}" appeared in reporting month ${reportingMonth}.`,
       });
     }
 
-    // Extract document dates for this vendor in current reporting month
-    const monthTx = currTx.filter((t) => getTransactionMonth(t) === reportingMonth);
-    const dateObjs: Date[] = [];
-    monthTx.forEach((t) => {
+    // Extract document dates for previous transactions
+    const prevDateObjs: Date[] = [];
+    prevTx.forEach((t) => {
       const rawDate = t.docDate || t.postingDate;
       if (rawDate) {
         const d = new Date(rawDate);
         if (!isNaN(d.getTime())) {
-          dateObjs.push(d);
+          prevDateObjs.push(d);
+        }
+      }
+    });
+
+    let prevStartDateStr: string | undefined;
+    let prevEndDateStr: string | undefined;
+
+    const formatD = (d: Date) => {
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${day}/${month}/${year}`;
+    };
+
+    if (prevDateObjs.length > 0) {
+      prevDateObjs.sort((a, b) => a.getTime() - b.getTime());
+      prevStartDateStr = formatD(prevDateObjs[0]);
+      prevEndDateStr = formatD(prevDateObjs[prevDateObjs.length - 1]);
+    }
+
+    // Extract document dates for this vendor in current reporting month or active current transactions
+    const monthTx = currTx.filter((t) => getTransactionMonth(t) === reportingMonth);
+    const activeCurrTx = monthTx.length > 0 ? monthTx : currTx;
+    const currDateObjs: Date[] = [];
+    activeCurrTx.forEach((t) => {
+      const rawDate = t.docDate || t.postingDate;
+      if (rawDate) {
+        const d = new Date(rawDate);
+        if (!isNaN(d.getTime())) {
+          currDateObjs.push(d);
         }
       }
     });
@@ -154,30 +220,22 @@ export function calculateWBSMonthlySummary(
     let startDateStr: string | undefined;
     let endDateStr: string | undefined;
 
-    if (dateObjs.length > 0) {
-      dateObjs.sort((a, b) => a.getTime() - b.getTime());
-      const minD = dateObjs[0];
-      const maxD = dateObjs[dateObjs.length - 1];
-
-      const formatD = (d: Date) => {
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const year = d.getFullYear();
-        return `${day}.${month}.${year}`;
-      };
-
-      startDateStr = formatD(minD);
-      endDateStr = formatD(maxD);
+    if (currDateObjs.length > 0) {
+      currDateObjs.sort((a, b) => a.getTime() - b.getTime());
+      startDateStr = formatD(currDateObjs[0]);
+      endDateStr = formatD(currDateObjs[currDateObjs.length - 1]);
     }
 
     // Show in vendor table if non-zero change or active
     vendorDeltas.push({
-      vendor,
+      vendor: vendorDisplay,
       previousBalance: prevBal,
       addThisMonth,
       newBalance: currBal,
       status,
       transactionCount: currTx.length,
+      prevStartDate: prevStartDateStr,
+      prevEndDate: prevEndDateStr,
       startDate: startDateStr,
       endDate: endDateStr,
     });
@@ -235,7 +293,12 @@ export function calculateWBSMonthlySummary(
 
   const summary: WBSMonthlySummary = {
     wbs,
-    projectName: project?.name || `Project ${wbs}`,
+    projectName: project?.name || `${projectType} Project ${wbs}`,
+    projectType,
+    sourceWbs,
+    cutoffDate: isOpex ? cutoffDate : undefined,
+    trackerActual: undefined,
+    variance: undefined,
     reportingMonth,
     assignedPmId: project?.assignedPmId,
     assignedPmName: project?.assignedPmName,

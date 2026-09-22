@@ -37,10 +37,10 @@ const initialUsers: User[] = [
 
 // Initial Projects
 const initialProjects: Project[] = [
-  { wbs: 'P-1001-CAPEX', name: 'Cloud Infrastructure Modernization', assignedPmId: 'usr-pm-sarah', assignedPmName: 'Sarah Jenkins (PM)', budgetEUR: 250000 },
-  { wbs: 'P-1002-CAPEX', name: 'Data Center Core Network Refresh', assignedPmId: 'usr-pm-sarah', assignedPmName: 'Sarah Jenkins (PM)', budgetEUR: 180000 },
-  { wbs: 'P-1003-CAPEX', name: 'SAP S/4HANA Enterprise Migration', assignedPmId: 'usr-pm-david', assignedPmName: 'David Chen (PM)', budgetEUR: 350000 },
-  { wbs: 'P-1004-CAPEX', name: 'Planisware Integration & Analytics', assignedPmId: 'usr-pm-david', assignedPmName: 'David Chen (PM)', budgetEUR: 120000 },
+  { wbs: 'P-1001-CAPEX', name: 'Cloud Infrastructure Modernization', projectType: 'CAPEX', assignedPmId: 'usr-pm-sarah', assignedPmName: 'Sarah Jenkins (PM)', budgetEUR: 250000 },
+  { wbs: 'P-1002-CAPEX', name: 'Data Center Core Network Refresh', projectType: 'CAPEX', assignedPmId: 'usr-pm-sarah', assignedPmName: 'Sarah Jenkins (PM)', budgetEUR: 180000 },
+  { wbs: 'P-1003-CAPEX', name: 'SAP S/4HANA Enterprise Migration', projectType: 'CAPEX', assignedPmId: 'usr-pm-david', assignedPmName: 'David Chen (PM)', budgetEUR: 350000 },
+  { wbs: 'P-1004-CAPEX', name: 'Planisware Integration & Analytics', projectType: 'CAPEX', assignedPmId: 'usr-pm-david', assignedPmName: 'David Chen (PM)', budgetEUR: 120000 },
 ];
 
 // Initial Vendor Aliases
@@ -58,7 +58,12 @@ class Store {
 
   constructor() {
     this.db = this.loadDatabase();
-    if (this.db.snapshots.length === 0 || this.db.snapshots[0]?.filename?.includes('OPEX Sheets')) {
+    const checkForWebAppPath = path.join(process.cwd(), 'checkforwebapp.xlsx');
+    if (
+      this.db.snapshots.length === 0 ||
+      this.db.projects.length < 100 ||
+      (fs.existsSync(checkForWebAppPath) && (!this.db.snapshots[0]?.filename || !this.db.snapshots[0].filename.includes('checkforwebapp')))
+    ) {
       this.seedInitialSnapshots();
     }
   }
@@ -199,64 +204,59 @@ class Store {
    */
   private seedInitialSnapshots() {
     try {
-      const localFilePath = path.join(process.cwd(), 'capex-export-CJI3.xlsx');
+      const checkForWebAppPath = path.join(process.cwd(), 'checkforwebapp.xlsx');
+      const capexExportPath = path.join(process.cwd(), 'capex-export-CJI3.xlsx');
+      const localFilePath = fs.existsSync(checkForWebAppPath) ? checkForWebAppPath : capexExportPath;
+
       if (fs.existsSync(localFilePath)) {
-        console.log('Seeding initial database directly from local capex-export-CJI3.xlsx file...');
+        const filename = path.basename(localFilePath);
+        console.log(`Seeding initial database directly from ${filename}...`);
         const fileBuf = fs.readFileSync(localFilePath);
         const wb = XLSX.read(fileBuf, { type: 'buffer' });
 
-        // Map WBS to Project Names using codes match sheet if available
-        const codeMap = new Map<string, string>();
-        if (wb.Sheets['codes match']) {
-          const matchRows = XLSX.utils.sheet_to_json(wb.Sheets['codes match']) as any[];
-          for (const row of matchRows) {
-            const projName = row['Project ID'];
-            const capexWbs = row['Project CAPEX ID'];
-            const opexWbs = row['Project OPEX ID'];
-            if (projName) {
-              if (capexWbs && capexWbs !== 'Not needed') codeMap.set(String(capexWbs).trim(), String(projName).trim());
-              if (opexWbs && opexWbs !== 'Not needed') codeMap.set(String(opexWbs).trim(), String(projName).trim());
-            }
-          }
-        }
-
         const snapId = 'snap-source-excel-v1';
-        const capexParsed = parseCJI3Excel(fileBuf, snapId, 'capex-export-CJI3.xlsx', this.db.vendorAliases, 'CAPEX CJI3');
+        const parsed = parseCJI3Excel(fileBuf, snapId, filename, this.db.vendorAliases, 'Sheet1');
 
-        // Strictly use CAPEX CJI3 transactions for the CAPEX system
-        const allTransactions = capexParsed.detailRows;
+        const allTransactions = parsed.detailRows;
 
-        // Extract accurate project budgets from CAPEX Tables if available
-        const budgetMap = new Map<string, number>();
-        if (wb.Sheets['CAPEX Tables']) {
-          const tableRows = XLSX.utils.sheet_to_json(wb.Sheets['CAPEX Tables'], { header: 1 }) as any[][];
-          for (let i = 6; i < tableRows.length; i++) {
-            const r = tableRows[i];
-            if (!r || !r[0]) continue;
-            const wbs = String(r[0]).trim();
-            const b = typeof r[14] === 'number' ? r[14] : parseFloat(r[14]);
-            if (wbs && !isNaN(b) && b > 0) {
-              budgetMap.set(wbs, b);
+        // Collect unique projects and identify CAPEX vs OPEX
+        const projectMap = new Map<string, { wbs: string; name: string; projectType: 'CAPEX' | 'OPEX' }>();
+
+        allTransactions.forEach((tx) => {
+          const rawWbs = tx.normalizedWbs || tx.wbs;
+          if (!rawWbs) return;
+
+          const isOpex = rawWbs.startsWith('C') || rawWbs.startsWith('C7941/');
+          let baseCode = rawWbs;
+
+          if (isOpex) {
+            const parts = rawWbs.split('/');
+            if (parts.length >= 2) {
+              baseCode = parts.slice(0, 2).join('/'); // e.g., C7941/2036
             }
           }
-        }
 
-        // Unique WBS elements
-        const wbsSet = new Map<string, string>();
-        allTransactions.forEach((tx) => {
-          const wbs = tx.normalizedWbs;
-          if (!wbsSet.has(wbs)) {
-            const mappedName = codeMap.get(wbs) || (tx.nameDescription ? tx.nameDescription.split('/')[1] || tx.nameDescription.split('/')[0] : `Project ${wbs}`);
-            wbsSet.set(wbs, mappedName);
+          if (!projectMap.has(baseCode)) {
+            const type = isOpex ? 'OPEX' : 'CAPEX';
+            let name = tx.nameDescription
+              ? tx.nameDescription.split('/')[1] || tx.nameDescription.split('/')[0]
+              : `${type} Project ${baseCode}`;
+            
+            projectMap.set(baseCode, {
+              wbs: baseCode,
+              name,
+              projectType: type,
+            });
           }
         });
 
-        const projectList: Project[] = Array.from(wbsSet.entries()).map(([wbs, name]) => ({
-          wbs,
-          name,
+        const projectList: Project[] = Array.from(projectMap.values()).map((p) => ({
+          wbs: p.wbs,
+          name: p.name,
+          projectType: p.projectType,
           assignedPmId: 'usr-pm-sarah',
           assignedPmName: 'Sarah Jenkins (PM)',
-          budgetEUR: budgetMap.get(wbs) || 350000,
+          budgetEUR: 350000,
         }));
 
         this.db.projects = projectList;
@@ -267,23 +267,23 @@ class Store {
           reportingMonth: '2026-09',
           version: 1,
           status: 'COMMITTED',
-          filename: 'capex-export-CJI3.xlsx (CAPEX CJI3)',
+          filename,
           uploadedBy: 'usr-admin',
           uploadedAt: new Date().toISOString(),
-          totalRows: capexParsed.summary.totalRows,
+          totalRows: parsed.summary.totalRows,
           detailRowsCount: allTransactions.length,
-          subtotalRowsCount: capexParsed.summary.subtotalCount,
-          wbsCount: wbsSet.size,
-          vendorCount: capexParsed.summary.vendorCount,
-          totalExternalSpend: capexParsed.summary.totalExternalSpend,
-          totalInternalReclass: capexParsed.summary.totalInternalReclass,
-          totalCorrectionTransfer: capexParsed.summary.totalCorrectionTransfer,
-          totalOtherNonPo: capexParsed.summary.totalOtherNonPo,
+          subtotalRowsCount: parsed.summary.subtotalCount,
+          wbsCount: projectList.length,
+          vendorCount: parsed.summary.vendorCount,
+          totalExternalSpend: parsed.summary.totalExternalSpend,
+          totalInternalReclass: parsed.summary.totalInternalReclass,
+          totalCorrectionTransfer: parsed.summary.totalCorrectionTransfer,
+          totalOtherNonPo: parsed.summary.totalOtherNonPo,
         };
 
         this.db.snapshots = [snapshot];
         this.save();
-        console.log(`Successfully seeded ${allTransactions.length} detail transactions across ${projectList.length} WBS projects.`);
+        console.log(`Successfully seeded ${allTransactions.length} detail transactions across ${projectList.length} WBS projects (${projectList.filter(p => p.projectType === 'OPEX').length} OPEX, ${projectList.filter(p => p.projectType === 'CAPEX').length} CAPEX).`);
         return;
       }
 

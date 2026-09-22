@@ -28,6 +28,71 @@ export function createFingerprint(row: Partial<RawCJI3Row>): string {
 }
 
 /**
+ * Normalizes entry/vendor names for classification & grouping by removing trailing month/year patterns
+ * e.g., 'App Mandays May 2023' -> 'App Mandays', '703 finance 08.2026' -> '703 finance'
+ */
+export function normalizeNamePattern(rawName: string | undefined): string {
+  if (!rawName) return '';
+  let name = String(rawName).trim();
+  name = name.replace(/\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4}$/i, '');
+  name = name.replace(/\s+\d{2}\.\d{4}$/i, '');
+  name = name.replace(/\s+\d{2}-\d{2}\.\d{4}$/i, '');
+  return name.trim();
+}
+
+/**
+ * CAPEX Manual Cost Inclusion Filter
+ * Evaluates whether a CAPEX transaction row is included in manual tracking
+ */
+export function includeManualCapex(row: {
+  docDate?: string;
+  postingDate?: string;
+  valueObjectCurr: number;
+  nameDescription?: string;
+  costElement?: string;
+  costElemDesc?: string;
+}): boolean {
+  const rawName = String(row.nameDescription || '');
+  const normName = normalizeNamePattern(rawName).toLowerCase();
+  const description = String(row.costElemDesc || '').toLowerCase();
+  const costElem = String(row.costElement || '').trim();
+  const amount = row.valueObjectCurr;
+  const hasDate = Boolean((row.docDate || '').trim() || (row.postingDate || '').trim());
+
+  const isTransfer =
+    normName.includes('reclass') ||
+    normName.includes('correction') ||
+    rawName.toLowerCase().includes('reclass') ||
+    rawName.toLowerCase().includes('correction');
+
+  const isEngineering =
+    normName.includes('engineering') ||
+    rawName.toLowerCase().includes('engineering');
+
+  const isInternalTime =
+    normName.includes('internal') ||
+    normName.includes('mandays') ||
+    normName.includes('man days') ||
+    normName.includes('opex to capex') ||
+    costElem === '6133000035' ||
+    costElem === '7200000000';
+
+  const isIntercompany =
+    costElem === '7405000000' ||
+    costElem === '6405000000' ||
+    description.startsWith('ic-') ||
+    description.startsWith('ic ');
+
+  if (!hasDate || amount <= 0 || isTransfer) {
+    return false;
+  }
+  if (isEngineering) {
+    return true;
+  }
+  return !isInternalTime && !isIntercompany;
+}
+
+/**
  * Extracts and normalizes vendor name from Column J text and alias database
  */
 export function normalizeVendor(
@@ -44,6 +109,9 @@ export function normalizeVendor(
     rawVendor = slashIdx >= 0 ? text.substring(0, slashIdx).trim() : text.trim();
   }
 
+  // Normalize trailing dates for clean vendor grouping
+  const normalizedPattern = normalizeNamePattern(rawVendor);
+
   if (!rawVendor) {
     if (purchasingDoc && purchasingDoc.trim()) {
       rawVendor = 'Unknown vendor';
@@ -52,7 +120,31 @@ export function normalizeVendor(
     }
   }
 
-  const upperRaw = rawVendor.toUpperCase();
+  let searchTarget = normalizedPattern || rawVendor;
+  let upperRaw = searchTarget.toUpperCase();
+
+  // Smart Vendor Consolidation Rules
+  if (upperRaw.includes('ROCKWELL')) {
+    return { rawVendor, normalizedVendor: 'ROCKWELL AUTOMATION', isUnknown: false };
+  }
+
+  if (
+    upperRaw.includes('ENGINEERING FEES') ||
+    upperRaw.includes('ETEX ENGINEERING') ||
+    (upperRaw.includes('ENGINEERING') && !upperRaw.includes('INTERNAL'))
+  ) {
+    return { rawVendor, normalizedVendor: 'Etex Engineering Fees', isUnknown: false };
+  }
+
+  if (upperRaw.includes('TAGETIK')) {
+    return { rawVendor, normalizedVendor: 'Tagetik Subscription', isUnknown: false };
+  }
+
+  // Clean company legal entity suffixes for clean grouping
+  searchTarget = searchTarget
+    .replace(/\s+(INC|INC\.|NV|SA|SRL|BV|LTD|LIMITED|PLE|GMBH|LLC|SPA|CORP|CORPORATION)$/i, '')
+    .trim();
+  upperRaw = searchTarget.toUpperCase();
 
   // Check alias list (exact match or prefix match or fuzzy prefix match)
   const matchedAlias = aliases.find((a) => {
@@ -60,7 +152,7 @@ export function normalizeVendor(
     return upperRaw === pattern || upperRaw.startsWith(pattern) || pattern.startsWith(upperRaw);
   });
 
-  const normalizedVendor = matchedAlias ? matchedAlias.canonicalVendor : rawVendor;
+  const normalizedVendor = matchedAlias ? matchedAlias.canonicalVendor : (searchTarget || rawVendor);
   const isUnknown = normalizedVendor === 'Unknown vendor' || !rawVendor;
 
   return { rawVendor, normalizedVendor, isUnknown };

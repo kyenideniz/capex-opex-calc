@@ -165,16 +165,28 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
 }) => {
   const [activeTab] = useState<'Actual' | 'Planned' | 'Budget'>('Actual');
 
+  const isOpex = summary.projectType === 'OPEX' || summary.wbs.startsWith('C') || summary.wbs.startsWith('C7941/');
+
   // Shared Identification Fields
   const [taskWbs, setTaskWbs] = useState(`${summary.wbs} - ${summary.projectName}`);
-  const [costAccount, setCostAccount] = useState('CAPEX-CAPEX-Vendor Servic');
+  const [costAccount, setCostAccount] = useState(
+    isOpex
+      ? 'OPEX-OPEX-External consultants/contractors'
+      : 'CAPEX-CAPEX-External consultants/contractors'
+  );
   const [resource, setResource] = useState('');
 
-  // Keep form fields synced with selected WBS - resource always blank
+  // Keep form fields synced with selected WBS
   useEffect(() => {
+    const opex = summary.projectType === 'OPEX' || summary.wbs.startsWith('C') || summary.wbs.startsWith('C7941/');
     setTaskWbs(`${summary.wbs} - ${summary.projectName}`);
+    setCostAccount(
+      opex
+        ? 'OPEX-OPEX-External consultants/contractors'
+        : 'CAPEX-CAPEX-External consultants/contractors'
+    );
     setResource('');
-  }, [summary.wbs, summary.projectName]);
+  }, [summary.wbs, summary.projectName, summary.projectType]);
 
   // Active Tab rows & columns
   const currentColumns = COLUMNS_BY_TAB.Actual;
@@ -195,6 +207,9 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
 
     // 1. TOP ENTRIES: Cumulative totals for previous month(s) per vendor (READ ONLY)
     activeVendors.forEach((v, idx) => {
+      const startDate = v.prevStartDate || v.startDate || prevStartDate;
+      const endDate = v.prevEndDate || v.endDate || prevEndDate;
+
       rows.push({
         id: `prev-${idx}-${v.vendor}`,
         quantity: formatPlaniswareQty(v.previousBalance),
@@ -202,8 +217,8 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
         sapWbsElement: '',
         label: v.vendor,
         type: 'Standard',
-        startDate: prevStartDate,
-        endDate: prevEndDate,
+        startDate: startDate,
+        endDate: endDate,
         isUpdate: false,
       });
     });
@@ -603,11 +618,11 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
   };
 
   const renderToolbar = () => (
-    <div className="inline-flex items-center bg-[#DBE5F9] rounded-lg px-2.5 py-1.5 gap-3.5 border border-[#CCD8F2] text-[#606F85]">
+    <div className="inline-flex items-center bg-[#DBE5F9] rounded-lg px-2.5 py-1.5 gap-3.5 border border-[#CCD8F2] text-[#92A1B6] cursor-not-allowed">
       <button
         type="button"
         onClick={copySelectionToClipboard}
-        className="hover:text-[#202733] transition-colors p-0.5 active:scale-95 cursor-pointer"
+        className="text-[#92A1B6] p-0.5 cursor-not-allowed"
         title="Copy selected values (Planisware TSV)"
       >
         <CopyIcon className="w-[17px] h-[17px]" />
@@ -631,7 +646,7 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
             showToast('Please press Cmd+V / Ctrl+V to paste');
           }
         }}
-        className="hover:text-[#202733] transition-colors p-0.5 active:scale-95 cursor-pointer"
+        className="text-[#92A1B6] p-0.5 cursor-not-allowed"
         title="Paste TSV values into table"
       >
         <PasteIcon className="w-[17px] h-[17px]" />
@@ -649,7 +664,7 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
           setActiveCell(null);
           showToast('Selection cleared');
         }}
-        className="hover:text-[#202733] transition-colors p-0.5 cursor-pointer"
+        className="text-[#92A1B6] p-0.5 cursor-not-allowed"
         title="Clear selection"
       >
         <CancelCircleIcon className="w-[17px] h-[17px]" />
@@ -685,7 +700,12 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
       >
         {/* Header Bar - Periwinkle Gradient */}
         <div className="h-[48px] bg-gradient-to-r from-[#627ED8] via-[#637ED9] to-[#607BD5] flex items-center justify-between px-5 text-white flex-shrink-0">
-          <h1 className="text-[17px] font-medium tracking-tight">Hours and expenditures summary</h1>
+          <h1 className="text-[16px] font-medium tracking-tight flex items-center gap-2">
+            <span>Hours and expenditures summary</span>
+            <span className="text-xs bg-white/20 text-white px-2 py-0.5 rounded-md font-semibold tracking-normal border border-white/20">
+              ( Manually Maintained External Costs Only )
+            </span>
+          </h1>
           <button
             type="button"
             className="text-white/80 transition-colors p-1 rounded hover:bg-white/10 cursor-not-allowed"
@@ -733,58 +753,59 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
                 <h2 className="text-[15px] font-bold text-[#202733] mb-3">Identification</h2>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-3 max-w-[800px]">
-                  <div className="flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      className="flex items-center gap-1.5 text-[13.5px] text-[#3B73DD] font-normal group whitespace-nowrap cursor-not-allowed"
-                      title="Field read-only"
-                    >
-                      <span className="group-hover:underline">Task or WBS element *</span>
-                      <OpenInWindowIcon className="w-3.5 h-3.5 text-[#869FD9]" />
-                    </button>
-                    <div className="flex items-center justify-between border-b border-slate-300 pb-0.5 w-[185px]">
+                  <div className="flex items-center justify-between gap-2 cursor-not-allowed" title="Field read-only">
+                    <div className="flex items-center gap-1.5 text-[13.5px] text-[#252D3A] whitespace-nowrap cursor-not-allowed">
+                      <span>Task or WBS element *</span>
+                      <OpenInWindowIcon className="w-3.5 h-3.5 text-[#9CA3AF]" />
+                    </div>
+                    <div className="flex items-center justify-between border-b border-slate-300 pb-0.5 w-[185px] bg-slate-50/60 rounded-t px-1 select-none cursor-not-allowed">
                       <input
                         type="text"
                         readOnly
+                        disabled
+                        tabIndex={-1}
                         value={taskWbs}
-                        onChange={(e) => setTaskWbs(e.target.value)}
-                        className="text-[13px] text-[#202733] bg-transparent focus:outline-none w-full truncate cursor-not-allowed"
+                        className="text-[13px] text-[#202733] bg-transparent focus:outline-none w-full truncate cursor-not-allowed select-none font-medium"
                       />
-                      <ChevronDown className="w-4 h-4 text-slate-500 cursor-not-allowed flex-shrink-0" />
+                      <ChevronDown className="w-4 h-4 text-slate-400 cursor-not-allowed flex-shrink-0" />
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 text-[13.5px] text-[#252D3A] whitespace-nowrap">
+                  <div className="flex items-center justify-between gap-2 cursor-not-allowed" title="Field read-only">
+                    <div className="flex items-center gap-1.5 text-[13.5px] text-[#252D3A] whitespace-nowrap cursor-not-allowed">
                       <span>Resource</span>
                       <OpenInWindowIcon className="w-3.5 h-3.5 text-[#9CA3AF]" />
                     </div>
-                    <div className="flex items-center justify-between border-b border-slate-300 pb-0.5 w-[185px]">
+                    <div className="flex items-center justify-between border-b border-slate-300 pb-0.5 w-[185px] bg-slate-50/60 rounded-t px-1 select-none cursor-not-allowed">
                       <input
                         type="text"
                         value=""
                         placeholder=""
                         readOnly
-                        className="text-[13px] text-[#202733] bg-transparent focus:outline-none w-full truncate cursor-not-allowed"
+                        disabled
+                        tabIndex={-1}
+                        className="text-[13px] text-[#202733] bg-transparent focus:outline-none w-full truncate cursor-not-allowed select-none"
                       />
-                      <ChevronDown className="w-4 h-4 text-slate-500 cursor-not-allowed flex-shrink-0" />
+                      <ChevronDown className="w-4 h-4 text-slate-400 cursor-not-allowed flex-shrink-0" />
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 text-[13.5px] text-[#252D3A] whitespace-nowrap">
+                  <div className="flex items-center justify-between gap-2 cursor-not-allowed" title="Field read-only">
+                    <div className="flex items-center gap-1.5 text-[13.5px] text-[#252D3A] whitespace-nowrap cursor-not-allowed">
                       <span>Cost account</span>
                       <OpenInWindowIcon className="w-3.5 h-3.5 text-[#9CA3AF]" />
                     </div>
-                    <div className="flex items-center justify-between border-b border-slate-300 pb-0.5 w-[185px]">
+                    <div className="flex items-center justify-between border-b border-slate-300 pb-0.5 w-[185px] bg-slate-50/60 rounded-t px-1 select-none cursor-not-allowed">
                       <input
                         type="text"
+                        readOnly
+                        disabled
+                        tabIndex={-1}
                         value={costAccount}
-                        onChange={(e) => setCostAccount(e.target.value)}
                         title={costAccount}
-                        className="text-[13px] text-[#202733] truncate bg-transparent focus:outline-none w-full cursor-not-allowed"
+                        className="text-[13px] text-[#202733] truncate bg-transparent focus:outline-none w-full cursor-not-allowed select-none font-medium"
                       />
-                      <ChevronDown className="w-4 h-4 text-slate-500 cursor-not-allowed flex-shrink-0" />
+                      <ChevronDown className="w-4 h-4 text-slate-400 cursor-not-allowed flex-shrink-0" />
                     </div>
                   </div>
                 </div>
