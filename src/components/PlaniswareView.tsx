@@ -10,6 +10,7 @@ import {
   Info
 } from 'lucide-react';
 import { WBSMonthlySummary } from '../types';
+import { resolveProjectName } from '../utils/wbsMap';
 
 // Exact Open-In-Window / External Link icon matching SAP & Planisware modal style
 function OpenInWindowIcon({ className = "w-3.5 h-3.5" }: { className?: string }) {
@@ -168,7 +169,7 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
   const isOpex = summary.projectType === 'OPEX' || summary.wbs.startsWith('C') || summary.wbs.startsWith('C7941/');
 
   // Shared Identification Fields
-  const [taskWbs, setTaskWbs] = useState(`${summary.wbs} - ${summary.projectName}`);
+  const [taskWbs, setTaskWbs] = useState(`${summary.wbs} - ${resolveProjectName(summary.wbs, summary.projectName)}`);
   const [costAccount, setCostAccount] = useState(
     isOpex
       ? 'OPEX-OPEX-External consultants/contractors'
@@ -179,7 +180,7 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
   // Keep form fields synced with selected WBS
   useEffect(() => {
     const opex = summary.projectType === 'OPEX' || summary.wbs.startsWith('C') || summary.wbs.startsWith('C7941/');
-    setTaskWbs(`${summary.wbs} - ${summary.projectName}`);
+    setTaskWbs(`${summary.wbs} - ${resolveProjectName(summary.wbs, summary.projectName)}`);
     setCostAccount(
       opex
         ? 'OPEX-OPEX-External consultants/contractors'
@@ -703,7 +704,7 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
           <h1 className="text-[16px] font-medium tracking-tight flex items-center gap-2">
             <span>Hours and expenditures summary</span>
             <span className="text-xs bg-white/20 text-white px-2 py-0.5 rounded-md font-semibold tracking-normal border border-white/20">
-              ( Manually Maintained External Costs Only )
+              ( Manually Maintained Costs Only )
             </span>
           </h1>
           <button

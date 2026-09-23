@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User, WBSMonthlySummary } from '../types';
 import { PlaniswareView } from './PlaniswareView';
+import { resolveProjectName } from '../utils/wbsMap';
 import {
   AlertTriangle,
   Check,
@@ -85,14 +86,21 @@ export const PMScreen: React.FC<PMScreenProps> = ({
     '2025-09',
   ];
 
+  const getWbsDisplayString = (s?: WBSMonthlySummary) => {
+    if (!s) return '';
+    const pName = resolveProjectName(s.wbs, s.projectName);
+    return pName ? `${s.wbs} - ${pName}` : s.wbs;
+  };
+
   // Filtered summaries for search
   const filteredSummaries = searchTerm.trim() === ''
     ? summaries
-    : summaries.filter(
-        (s) =>
-          s.wbs.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          s.projectName.toLowerCase().includes(searchTerm.toLowerCase())
-      );
+    : summaries.filter((s) => {
+        const term = searchTerm.toLowerCase();
+        const pName = resolveProjectName(s.wbs, s.projectName).toLowerCase();
+        const wbsCode = s.wbs.toLowerCase();
+        return wbsCode.includes(term) || pName.includes(term);
+      });
 
   // Reset highlighted item when search term changes
   useEffect(() => {
@@ -297,14 +305,6 @@ export const PMScreen: React.FC<PMScreenProps> = ({
               </span>
             </label>
             <div className="flex items-center space-x-3">
-              <button
-                onClick={onExportExcel}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 font-semibold text-[11px] rounded-lg border border-slate-200 shadow-2xs transition flex items-center space-x-1"
-                title="Export current reconciliation to Excel"
-              >
-                <Download className="w-3 h-3 text-slate-500" />
-                <span>Export Excel</span>
-              </button>
               <span className="text-[11px] text-slate-500 font-medium">
                 {summaries.length} available projects
               </span>
@@ -321,8 +321,8 @@ export const PMScreen: React.FC<PMScreenProps> = ({
               ref={searchInputRef}
               type="text"
               autoComplete="off"
-              value={isSearchOpen ? searchTerm : activeSummary.wbs}
-              placeholder="Type WBS code (e.g. C7941/2036 or O7941/2519)..."
+              value={isSearchOpen ? searchTerm : (activeSummary ? getWbsDisplayString(activeSummary) : '')}
+              placeholder="Search by WBS Element or Project Name (e.g. C7941/8116 or Symphony)..."
               onFocus={() => {
                 setIsSearchOpen(true);
                 setSearchTerm('');
@@ -398,9 +398,9 @@ export const PMScreen: React.FC<PMScreenProps> = ({
                             : 'hover:bg-slate-50 text-slate-700'
                         }`}
                       >
-                        <div className="flex items-center space-x-2.5 truncate">
+                        <div className="flex items-center space-x-2 truncate">
                           <span
-                            className={`text-[10px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded border ${
+                            className={`text-[10px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded border flex-shrink-0 ${
                               isOpex
                                 ? 'bg-purple-100 text-purple-800 border-purple-200'
                                 : 'bg-blue-100 text-blue-800 border-blue-200'
@@ -408,12 +408,15 @@ export const PMScreen: React.FC<PMScreenProps> = ({
                           >
                             {isOpex ? 'OPEX' : 'CAPEX'}
                           </span>
-                          <span className={`font-mono text-xs px-2 py-0.5 rounded border ${
+                          <span className={`font-mono text-xs px-2 py-0.5 rounded border flex-shrink-0 ${
                             isSelected || isHighlighted
                               ? 'bg-blue-100/80 border-blue-300 text-blue-800 font-bold'
                               : 'bg-slate-100 border-slate-200 text-slate-800 font-semibold'
                           }`}>
                             {s.wbs}
+                          </span>
+                          <span className="text-xs text-slate-600 font-medium truncate">
+                            - {resolveProjectName(s.wbs, s.projectName)}
                           </span>
                         </div>
 

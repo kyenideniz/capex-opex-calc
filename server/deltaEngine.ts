@@ -8,6 +8,7 @@ import {
   WBSMonthlySummary,
 } from '../src/types.js';
 import { includeManualCapex } from './parser.js';
+import { resolveProjectName } from '../src/utils/wbsMap.js';
 
 export function getTransactionMonth(t: ImportedTransaction): string {
   if (t.refFiscalYear && t.fromPeriod) {
@@ -293,7 +294,7 @@ export function calculateWBSMonthlySummary(
 
   const summary: WBSMonthlySummary = {
     wbs,
-    projectName: project?.name || `${projectType} Project ${wbs}`,
+    projectName: resolveProjectName(wbs, project?.name || `${projectType} Project ${wbs}`),
     projectType,
     sourceWbs,
     cutoffDate: isOpex ? cutoffDate : undefined,

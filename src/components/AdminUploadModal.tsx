@@ -247,10 +247,10 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-2xl border border-slate-200 my-8 space-y-5">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-hidden">
+      <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl border border-slate-200 flex flex-col max-h-[90vh] sm:max-h-[85vh] overflow-hidden my-auto">
         {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+        <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5 flex-shrink-0">
           <div className="flex items-center space-x-3">
             <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
               <Table className="w-5 h-5" />
@@ -260,45 +260,47 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
               <p className="text-xs text-slate-500">Copy WBS code lists for monthly Excel updates or load raw SAP CJI3 extracts</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex items-center justify-between bg-slate-100 p-1 rounded-xl border border-slate-200">
-          <div className="flex space-x-1">
-            <button
-              onClick={() => setActiveTab('wbs_ref')}
-              className={`px-4 py-2 text-xs font-bold rounded-lg transition flex items-center space-x-2 ${
-                activeTab === 'wbs_ref'
-                  ? 'bg-white text-blue-700 shadow-xs border border-slate-200'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Copy className="w-3.5 h-3.5" />
-              <span>📋 WBS Codes for Excel Copy</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('upload')}
-              className={`px-4 py-2 text-xs font-bold rounded-lg transition flex items-center space-x-2 ${
-                activeTab === 'upload'
-                  ? 'bg-white text-blue-700 shadow-xs border border-slate-200'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <FileUp className="w-3.5 h-3.5" />
-              <span>📤 Upload / Load CJI3 Source</span>
-            </button>
-          </div>
+        {/* Modal Scrollable Body */}
+        <div className="p-4 sm:p-5 flex-1 overflow-y-auto space-y-4">
+          {/* Tab Navigation */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-slate-100 p-1 rounded-xl border border-slate-200 gap-2">
+            <div className="flex space-x-1">
+              <button
+                onClick={() => setActiveTab('wbs_ref')}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition flex items-center space-x-2 cursor-pointer ${
+                  activeTab === 'wbs_ref'
+                    ? 'bg-white text-blue-700 shadow-xs border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>📋 WBS Codes for Excel Copy</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('upload')}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition flex items-center space-x-2 cursor-pointer ${
+                  activeTab === 'upload'
+                    ? 'bg-white text-blue-700 shadow-xs border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <FileUp className="w-3.5 h-3.5" />
+                <span>📤 Upload / Load CJI3 Source</span>
+              </button>
+            </div>
 
-          {copyToast && (
-            <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-lg animate-fade-in flex items-center gap-1.5">
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-              {copyToast}
-            </span>
-          )}
-        </div>
+            {copyToast && (
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-lg animate-fade-in flex items-center gap-1.5">
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                {copyToast}
+              </span>
+            )}
+          </div>
 
         {/* TAB 1: WBS CODES REFERENCE & EXCEL COPY */}
         {activeTab === 'wbs_ref' && (
@@ -324,15 +326,6 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
                 >
                   <Copy className="w-3.5 h-3.5" />
                   <span>Copy 3 Columns (Excel TSV)</span>
-                </button>
-
-                <button
-                  onClick={handleExportXlsx}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
-                  title="Download .xlsx file with OPEX, CAPEX, and Manual Maintenance columns"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export .xlsx</span>
                 </button>
               </div>
             </div>
@@ -393,7 +386,7 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
               </div>
 
               {/* Table Body (Scrollable) */}
-              <div className="max-h-[380px] overflow-y-auto divide-y divide-slate-100">
+              <div className="max-h-[280px] sm:max-h-[320px] overflow-y-auto divide-y divide-slate-100">
                 {maxDisplayRows > 0 ? (
                   Array.from({ length: maxDisplayRows }).map((_, idx) => (
                     <div key={idx} className="grid grid-cols-3 divide-x divide-slate-100 text-xs font-mono hover:bg-slate-50 transition">
@@ -600,9 +593,10 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
             )}
           </div>
         )}
+        </div>
 
         {/* Modal Footer */}
-        <div className="flex items-center justify-end space-x-3 pt-2 border-t border-slate-100">
+        <div className="flex items-center justify-end space-x-3 p-4 sm:px-5 border-t border-slate-100 flex-shrink-0">
           <button
             type="button"
             onClick={onClose}

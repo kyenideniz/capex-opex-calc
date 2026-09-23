@@ -12,6 +12,7 @@ import {
 } from '../src/types.js';
 import { parseCJI3Excel } from './parser.js';
 import * as XLSX from 'xlsx';
+import { resolveProjectName } from '../src/utils/wbsMap.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -238,9 +239,10 @@ class Store {
 
           if (!projectMap.has(baseCode)) {
             const type = isOpex ? 'OPEX' : 'CAPEX';
-            let name = tx.nameDescription
+            const defaultTxName = tx.nameDescription
               ? tx.nameDescription.split('/')[1] || tx.nameDescription.split('/')[0]
               : `${type} Project ${baseCode}`;
+            const name = resolveProjectName(baseCode, defaultTxName);
             
             projectMap.set(baseCode, {
               wbs: baseCode,

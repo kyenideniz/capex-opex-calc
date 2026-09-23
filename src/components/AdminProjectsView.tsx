@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Project, User, WBSMonthlySummary } from '../types';
 import { api } from '../api';
+import { resolveProjectName } from '../utils/wbsMap';
 import {
   Building2,
   Download,
@@ -101,26 +102,10 @@ export const AdminProjectsView: React.FC<AdminProjectsViewProps> = ({
         <div className="flex items-center space-x-2">
           <button
             onClick={onOpenVendorManager}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center space-x-1.5"
+            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer"
           >
             <Building2 className="w-4 h-4 text-amber-400" />
             <span>Vendor Aliases</span>
-          </button>
-
-          <button
-            onClick={handleExportPlanisware}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center space-x-1.5"
-          >
-            <Download className="w-4 h-4 text-emerald-400" />
-            <span>Export Planisware Instructions</span>
-          </button>
-
-          <button
-            onClick={handleExportReconciliation}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center space-x-1.5"
-          >
-            <FileSpreadsheet className="w-4 h-4 text-blue-400" />
-            <span>Export Reconciliation Audit</span>
           </button>
         </div>
       </div>
@@ -166,7 +151,7 @@ export const AdminProjectsView: React.FC<AdminProjectsViewProps> = ({
                 return (
                   <tr key={s.wbs} className="hover:bg-slate-50 transition">
                     <td className="py-4 px-4 font-mono font-bold text-slate-900">{s.wbs}</td>
-                    <td className="py-4 px-4 font-semibold text-slate-800">{s.projectName}</td>
+                    <td className="py-4 px-4 font-semibold text-slate-800">{resolveProjectName(s.wbs, s.projectName)}</td>
                     
                     {/* Assigned PM */}
                     <td className="py-4 px-4">
