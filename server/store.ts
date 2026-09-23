@@ -13,6 +13,7 @@ import {
 import { parseCJI3Excel } from './parser.js';
 import * as XLSX from 'xlsx';
 import { resolveProjectName } from '../src/utils/wbsMap.js';
+import dbSeedData from '../data/db.json';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -71,16 +72,25 @@ class Store {
 
   private loadDatabase(): AppDatabase {
     try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.projects) && parsed.projects.length >= 50) {
+          return parsed;
+        }
       }
     } catch (e) {
-      console.error('Error reading db.json, re-initializing database:', e);
+      console.error('Error reading db.json from disk:', e);
+    }
+
+    // Serverless / Vercel fallback: Use embedded pre-calculated dbSeedData
+    try {
+      if (dbSeedData && Array.isArray((dbSeedData as any).projects) && (dbSeedData as any).projects.length >= 50) {
+        console.log(`Loaded ${(dbSeedData as any).projects.length} projects from embedded database seed.`);
+        return dbSeedData as unknown as AppDatabase;
+      }
+    } catch (e) {
+      console.error('Error loading dbSeedData fallback:', e);
     }
 
     return {
@@ -205,11 +215,17 @@ class Store {
    */
   private seedInitialSnapshots() {
     try {
-      const checkForWebAppPath = path.join(process.cwd(), 'checkforwebapp.xlsx');
-      const capexExportPath = path.join(process.cwd(), 'capex-export-CJI3.xlsx');
-      const localFilePath = fs.existsSync(checkForWebAppPath) ? checkForWebAppPath : capexExportPath;
+      const candidates = [
+        path.join(process.cwd(), 'checkforwebapp.xlsx'),
+        path.join(process.cwd(), 'capex-export-CJI3.xlsx'),
+        path.join(__dirname, '../checkforwebapp.xlsx'),
+        path.join(__dirname, '../capex-export-CJI3.xlsx'),
+        path.join(__dirname, '../../checkforwebapp.xlsx'),
+        path.join(__dirname, '../../capex-export-CJI3.xlsx'),
+      ];
+      const localFilePath = candidates.find((p) => fs.existsSync(p));
 
-      if (fs.existsSync(localFilePath)) {
+      if (localFilePath && fs.existsSync(localFilePath)) {
         const filename = path.basename(localFilePath);
         console.log(`Seeding initial database directly from ${filename}...`);
         const fileBuf = fs.readFileSync(localFilePath);

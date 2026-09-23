@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/index.ts": {
+      "includeFiles": "checkforwebapp.xlsx,capex-export-CJI3.xlsx,PLW_Portfolio_Export.csv,data/**,src/data/**"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
