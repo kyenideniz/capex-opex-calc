@@ -10,10 +10,16 @@ import {
   User,
   VendorAlias,
 } from '../src/types.js';
-import { parseCJI3Excel } from './parser.js';
+import { parseCJI3Excel, classifyRow } from './parser.js';
 import * as XLSX from 'xlsx';
 import { resolveProjectName } from '../src/utils/wbsMap.js';
-import dbSeedData from '../data/db.json';
+import {
+  findPlaniswareSourceFile,
+  parsePlaniswareExport,
+  applyPlaniswareMapping,
+  TARGET_PLANISWARE_FILE,
+} from './planiswareSource.js';
+
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -60,6 +66,16 @@ class Store {
 
   constructor() {
     this.db = this.loadDatabase();
+
+    // Re-run classifyRow on stored transactions to enforce updated internal mandays & reclass rules
+    if (this.db.transactions && this.db.transactions.length > 0) {
+      this.db.transactions.forEach((tx) => {
+        if (!tx.userOverride) {
+          tx.classification = classifyRow(tx.purchasingDoc, tx.nameDescription, tx.costElemDesc, tx.costElement, tx.rawVendor);
+        }
+      });
+    }
+
     const checkForWebAppPath = path.join(process.cwd(), 'checkforwebapp.xlsx');
     if (
       this.db.snapshots.length === 0 ||
@@ -68,29 +84,148 @@ class Store {
     ) {
       this.seedInitialSnapshots();
     }
+
+    // Load new actual spendings export (CJI_export_01-11-2026.xlsx) while preserving baseline
+    this.syncNewCJIExport();
+
+    // Automatically synchronize project names and codes from Planisware export source
+    this.syncPlaniswareMapping();
+  }
+
+  public getBaselineTransactions(): ImportedTransaction[] {
+    const baselineSnap = this.db.snapshots.find(
+      (s) =>
+        s.id === 'snap-source-excel-v1' ||
+        s.id === 'snap-baseline-v1' ||
+        s.filename.includes('checkforwebapp') ||
+        s.filename.includes('capex-export-CJI3')
+    );
+    if (baselineSnap) {
+      return this.db.transactions.filter((t) => t.snapshotId === baselineSnap.id);
+    }
+    return [];
+  }
+
+  public syncNewCJIExport() {
+    const newFilePath = path.join(process.cwd(), 'CJI_export_01-11-2026.xlsx');
+    if (!fs.existsSync(newFilePath)) return;
+
+    const snapId = 'snap-2026-10-v1';
+    const filename = 'CJI_export_01-11-2026.xlsx';
+    const alreadyLoaded = this.db.snapshots.some((s) => s.id === snapId || s.filename === filename);
+    if (alreadyLoaded && this.db.transactions.some((t) => t.snapshotId === snapId)) {
+      return;
+    }
+
+    try {
+      console.log(`Loading new actual spendings file: ${filename}...`);
+      const fileBuf = fs.readFileSync(newFilePath);
+      const parsed = parseCJI3Excel(fileBuf, snapId, filename, this.db.vendorAliases, 'Sheet1');
+
+      // Keep existing transactions from other snapshots (such as snap-source-excel-v1 baseline)
+      this.db.transactions = this.db.transactions.filter((t) => t.snapshotId !== snapId);
+      this.db.transactions.push(...parsed.detailRows);
+
+      // Add or update snapshot record
+      const existingSnapIndex = this.db.snapshots.findIndex((s) => s.id === snapId);
+      const snapshot: MonthlySnapshot = {
+        id: snapId,
+        reportingMonth: '2026-10',
+        version: 1,
+        status: 'COMMITTED',
+        filename,
+        uploadedBy: 'usr-admin',
+        uploadedAt: new Date().toISOString(),
+        totalRows: parsed.summary.totalRows,
+        detailRowsCount: parsed.detailRows.length,
+        subtotalRowsCount: parsed.summary.subtotalCount,
+        wbsCount: parsed.summary.wbsCount,
+        vendorCount: parsed.summary.vendorCount,
+        totalExternalSpend: parsed.summary.totalExternalSpend,
+        totalInternalReclass: parsed.summary.totalInternalReclass,
+        totalCorrectionTransfer: parsed.summary.totalCorrectionTransfer,
+        totalOtherNonPo: parsed.summary.totalOtherNonPo,
+      };
+
+      if (existingSnapIndex >= 0) {
+        this.db.snapshots[existingSnapIndex] = snapshot;
+      } else {
+        this.db.snapshots.push(snapshot);
+      }
+
+      // Add any missing projects from this new extract to db.projects
+      const existingWbs = new Set(this.db.projects.map((p) => p.wbs));
+      parsed.detailRows.forEach((tx) => {
+        const rawWbs = tx.normalizedWbs || tx.wbs;
+        if (!rawWbs) return;
+        const parts = rawWbs.split('/');
+        const baseCode = parts.length >= 2 ? parts.slice(0, 2).join('/') : rawWbs;
+        const isOpex = baseCode.startsWith('C') || baseCode.startsWith('C7941/');
+
+        if (!existingWbs.has(baseCode)) {
+          existingWbs.add(baseCode);
+          const type = isOpex ? 'OPEX' : 'CAPEX';
+          const defaultTxName = tx.nameDescription
+            ? tx.nameDescription.split('/')[1] || tx.nameDescription.split('/')[0]
+            : `${type} Project ${baseCode}`;
+          this.db.projects.push({
+            wbs: baseCode,
+            name: resolveProjectName(baseCode, defaultTxName),
+            projectType: type,
+            assignedPmId: 'usr-pm-sarah',
+            assignedPmName: 'Sarah Jenkins (PM)',
+            budgetEUR: 350000,
+          });
+        }
+      });
+
+      this.save();
+      console.log(`Loaded new actual spendings extract ${filename}: ${parsed.detailRows.length} transactions across ${this.db.projects.length} total projects.`);
+    } catch (err) {
+      console.error(`Error loading ${filename}:`, err);
+    }
+  }
+
+  public syncPlaniswareMapping(overrideFilePath?: string): { updatedProjectsCount: number; totalMapped: number; filename: string } {
+    const sourceInfo = overrideFilePath
+      ? { filePath: overrideFilePath, filename: path.basename(overrideFilePath), isTargetFile: path.basename(overrideFilePath) === TARGET_PLANISWARE_FILE }
+      : findPlaniswareSourceFile();
+
+    if (sourceInfo.filePath && fs.existsSync(sourceInfo.filePath)) {
+      try {
+        console.log(`Loading project codes & names from Planisware source: ${sourceInfo.filename}...`);
+        const parsed = parsePlaniswareExport(sourceInfo.filePath, sourceInfo.filename);
+        if (parsed.totalParsed > 0) {
+          const res = applyPlaniswareMapping(
+            parsed.mapping,
+            parsed.projects,
+            sourceInfo.filename,
+            this.db.projects,
+            () => this.save()
+          );
+          console.log(`Planisware project source loaded: ${res.totalMapped} codes mapped, updated ${res.updatedProjectsCount} project entries.`);
+          return { updatedProjectsCount: res.updatedProjectsCount, totalMapped: res.totalMapped, filename: sourceInfo.filename };
+        }
+      } catch (err) {
+        console.warn(`Failed loading Planisware project source from ${sourceInfo.filename}:`, err);
+      }
+    }
+    return { updatedProjectsCount: 0, totalMapped: 0, filename: sourceInfo.filename };
   }
 
   private loadDatabase(): AppDatabase {
+
     try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.projects) && parsed.projects.length >= 50) {
-          return parsed;
-        }
+        return JSON.parse(raw);
       }
     } catch (e) {
-      console.error('Error reading db.json from disk:', e);
-    }
-
-    // Serverless / Vercel fallback: Use embedded pre-calculated dbSeedData
-    try {
-      if (dbSeedData && Array.isArray((dbSeedData as any).projects) && (dbSeedData as any).projects.length >= 50) {
-        console.log(`Loaded ${(dbSeedData as any).projects.length} projects from embedded database seed.`);
-        return dbSeedData as unknown as AppDatabase;
-      }
-    } catch (e) {
-      console.error('Error loading dbSeedData fallback:', e);
+      console.error('Error reading db.json, re-initializing database:', e);
     }
 
     return {
@@ -215,17 +350,11 @@ class Store {
    */
   private seedInitialSnapshots() {
     try {
-      const candidates = [
-        path.join(process.cwd(), 'checkforwebapp.xlsx'),
-        path.join(process.cwd(), 'capex-export-CJI3.xlsx'),
-        path.join(__dirname, '../checkforwebapp.xlsx'),
-        path.join(__dirname, '../capex-export-CJI3.xlsx'),
-        path.join(__dirname, '../../checkforwebapp.xlsx'),
-        path.join(__dirname, '../../capex-export-CJI3.xlsx'),
-      ];
-      const localFilePath = candidates.find((p) => fs.existsSync(p));
+      const checkForWebAppPath = path.join(process.cwd(), 'checkforwebapp.xlsx');
+      const capexExportPath = path.join(process.cwd(), 'capex-export-CJI3.xlsx');
+      const localFilePath = fs.existsSync(checkForWebAppPath) ? checkForWebAppPath : capexExportPath;
 
-      if (localFilePath && fs.existsSync(localFilePath)) {
+      if (fs.existsSync(localFilePath)) {
         const filename = path.basename(localFilePath);
         console.log(`Seeding initial database directly from ${filename}...`);
         const fileBuf = fs.readFileSync(localFilePath);

@@ -111,6 +111,9 @@ export interface VendorMonthlyDelta {
   prevEndDate?: string;
   startDate?: string;
   endDate?: string;
+  hasCorrection?: boolean;
+  correctionDiff?: number;
+  oldBalance?: number;
 }
 
 export interface WBSMonthlySummary {
@@ -140,7 +143,11 @@ export interface WBSMonthlySummary {
   processedAt?: string;
   warningsCount: number;
   vendorDeltas: VendorMonthlyDelta[];
+  hasDifferenceFromOldSource?: boolean;
+  hasPastCorrection?: boolean;
+  carouselOrderIndex?: number;
 }
+
 
 export type MonthCloseStatus = 'Not started' | 'To review' | 'Ready to enter' | 'Processed' | 'Reopened';
 
@@ -175,7 +182,8 @@ export interface ReviewWarning {
     | 'PROCESSED_AMOUNT_CHANGED'
     | 'BUDGET_EXCEEDED'
     | 'SUBTOTAL_MISMATCH'
-    | 'MULTIPLE_ALIASES_MATCH';
+    | 'MULTIPLE_ALIASES_MATCH'
+    | 'PAST_CORRECTION';
   message: string;
   details?: string;
   transactionId?: string;
@@ -220,3 +228,23 @@ export interface ParseResult {
     duplicateCount: number;
   };
 }
+
+export interface PlaniswareProjectEntry {
+  projectId: string;
+  name: string;
+  capexId?: string;
+  opexId?: string;
+  pm?: string;
+  budgetEUR?: number;
+}
+
+export interface PlaniswareSourceStatus {
+  activeSourceFile: string;
+  expectedFilename: string;
+  fileExists: boolean;
+  totalMappedCodes: number;
+  totalProjects: number;
+  lastLoadedAt: string | null;
+  projects: PlaniswareProjectEntry[];
+}
+

@@ -11,12 +11,23 @@ import {
 } from './excelExport.js';
 import { runAllTests } from './tests/suite.js';
 import { MonthlySnapshot, MonthCloseConfirmation } from '../src/types.js';
+import { getPlaniswareStatus, TARGET_PLANISWARE_FILE, getCarouselOrderIndex, globalRowOrderMap, findPlaniswareSourceFile, parsePlaniswareExport, getLinkedWbsCodes } from './planiswareSource.js';
+
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 export function createExpressApp() {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
+
+  const plwFile = findPlaniswareSourceFile();
+  if (plwFile.filePath && fs.existsSync(plwFile.filePath)) {
+    try {
+      parsePlaniswareExport(plwFile.filePath, plwFile.filename);
+    } catch (err) {
+      console.warn('Failed to parse Planisware export in createExpressApp:', err);
+    }
+  }
 
   // Auth
   app.get('/api/auth/me', (req, res) => {
@@ -95,7 +106,7 @@ export function createExpressApp() {
       parsed.detailRows.forEach((tx) => {
         if (!existingWbs.has(tx.normalizedWbs)) {
           existingWbs.add(tx.normalizedWbs);
-          const isOpex = tx.normalizedWbs.startsWith('C') || tx.normalizedWbs.startsWith('C7941/');
+          const isOpex = tx.normalizedWbs.startsWith('O') || tx.normalizedWbs.startsWith('O7941/');
           const projectType = isOpex ? 'OPEX' : 'CAPEX';
           db.projects.push({
             wbs: tx.normalizedWbs,
@@ -172,7 +183,7 @@ export function createExpressApp() {
       parsed.detailRows.forEach((tx) => {
         if (!existingWbs.has(tx.normalizedWbs)) {
           existingWbs.add(tx.normalizedWbs);
-          const isOpex = tx.normalizedWbs.startsWith('C') || tx.normalizedWbs.startsWith('C7941/');
+          const isOpex = tx.normalizedWbs.startsWith('O') || tx.normalizedWbs.startsWith('O7941/');
           const projectType = isOpex ? 'OPEX' : 'CAPEX';
           db.projects.push({
             wbs: tx.normalizedWbs,
@@ -264,9 +275,10 @@ export function createExpressApp() {
       const m = getTransactionMonth(t);
       if (m) monthsSet.add(m);
     });
+    monthsSet.add('2026-10');
     monthsSet.add('2026-09');
     if (monthsSet.size === 0) {
-      ['2026-09', '2026-08', '2026-07', '2026-06', '2026-05', '2026-04', '2026-03', '2026-02', '2026-01', '2025-12', '2025-11', '2025-10', '2025-09'].forEach((m) => monthsSet.add(m));
+      ['2026-10', '2026-09', '2026-08', '2026-07', '2026-06', '2026-05', '2026-04', '2026-03', '2026-02', '2026-01', '2025-12', '2025-11', '2025-10', '2025-09'].forEach((m) => monthsSet.add(m));
     }
     const months = Array.from(monthsSet).sort().reverse();
     res.json(months);
@@ -274,13 +286,29 @@ export function createExpressApp() {
 
   // PM Summaries Endpoint
   app.get('/api/pm/summary', (req, res) => {
-    const month = (req.query.month as string) || '2026-09';
+    const month = (req.query.month as string) || '2026-10';
     const pmId = req.query.pmId as string | undefined;
 
     const db = store.getDB();
 
-    const currentTx = db.transactions.filter((t) => getTransactionMonth(t) <= month);
-    const prevTx = db.transactions.filter((t) => getTransactionMonth(t) < month);
+    // Use latest snapshot transactions if available
+    const newSnap = db.snapshots.find((s) => s.id === 'snap-2026-10-v1' || s.filename.includes('CJI_export_01-11-2026'));
+    const activeTxPool = newSnap ? db.transactions.filter((t) => t.snapshotId === newSnap.id) : db.transactions;
+    const baselineTxList = store.getBaselineTransactions();
+
+    // When viewing 2026-10 (where user missed updates in Sept + Oct):
+    // "balance before this month" = pre-September spend (< 2026-09)
+    // "add this month" = September + October spend combined
+    let currentTx: typeof db.transactions;
+    let prevTx: typeof db.transactions;
+
+    if (month === '2026-10') {
+      currentTx = activeTxPool.filter((t) => getTransactionMonth(t) <= '2026-10');
+      prevTx = activeTxPool.filter((t) => getTransactionMonth(t) < '2026-09');
+    } else {
+      currentTx = activeTxPool.filter((t) => getTransactionMonth(t) <= month);
+      prevTx = activeTxPool.filter((t) => getTransactionMonth(t) < month);
+    }
 
     let projects = db.projects;
     if (pmId) {
@@ -297,9 +325,19 @@ export function createExpressApp() {
         currentTx,
         prevTx,
         proj,
-        monthClose
+        monthClose,
+        baselineTxList
       );
+      summary.carouselOrderIndex = getCarouselOrderIndex(proj.wbs);
       return summary;
+    });
+
+    // Sort projects strictly by Planisware export row order
+    summaries.sort((a, b) => {
+      const ordA = a.carouselOrderIndex !== undefined ? a.carouselOrderIndex : 999999;
+      const ordB = b.carouselOrderIndex !== undefined ? b.carouselOrderIndex : 999999;
+      if (ordA !== ordB) return ordA - ordB;
+      return a.wbs.localeCompare(b.wbs);
     });
 
     res.json({
@@ -389,7 +427,87 @@ export function createExpressApp() {
     res.json(proj);
   });
 
+  // Planisware Project Export & Code Matching Endpoints
+  app.get('/api/planisware/status', (req, res) => {
+    res.json(getPlaniswareStatus());
+  });
+
+  app.post('/api/planisware/upload', upload.single('file'), (req, res) => {
+    try {
+      let fileBuffer: Buffer;
+      let filename = TARGET_PLANISWARE_FILE;
+
+      if (req.file) {
+        fileBuffer = req.file.buffer;
+        filename = req.file.originalname || TARGET_PLANISWARE_FILE;
+      } else if (req.body.base64) {
+        fileBuffer = Buffer.from(req.body.base64, 'base64');
+        filename = req.body.filename || TARGET_PLANISWARE_FILE;
+      } else {
+        return res.status(400).json({ error: 'No file uploaded or provided.' });
+      }
+
+      // Always save target file as export-809912-2109-20261101-191220.xlsx in root
+      const targetPath = path.join(process.cwd(), TARGET_PLANISWARE_FILE);
+      fs.writeFileSync(targetPath, fileBuffer);
+
+      // Trigger synchronization
+      const syncResult = store.syncPlaniswareMapping(targetPath);
+
+      store.getDB().auditLogs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: 'usr-admin',
+        userName: 'Administrator',
+        action: 'UPDATE_PLANISWARE_SOURCE',
+        target: TARGET_PLANISWARE_FILE,
+        details: `Uploaded new Planisware projects export (${filename}). Mapped ${syncResult.totalMapped} WBS codes and synchronized ${syncResult.updatedProjectsCount} project entries.`,
+      });
+
+      store.save();
+
+      res.json({
+        success: true,
+        message: `Successfully uploaded ${TARGET_PLANISWARE_FILE} and mapped ${syncResult.totalMapped} project codes.`,
+        filename: TARGET_PLANISWARE_FILE,
+        ...syncResult,
+        status: getPlaniswareStatus(),
+      });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message || 'Failed to process Planisware export file.' });
+    }
+  });
+
+  app.post('/api/planisware/reload', (req, res) => {
+    try {
+      const syncResult = store.syncPlaniswareMapping();
+      const status = getPlaniswareStatus();
+
+      store.getDB().auditLogs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: 'usr-admin',
+        userName: 'Administrator',
+        action: 'RELOAD_PLANISWARE_SOURCE',
+        target: status.activeSourceFile,
+        details: `Scanned and reloaded Planisware project source from ${status.activeSourceFile}. Total mapped codes: ${status.totalMappedCodes}.`,
+      });
+
+      store.save();
+
+      res.json({
+        success: true,
+        message: `Planisware project source refreshed (${status.activeSourceFile}).`,
+        syncResult,
+        status,
+      });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message || 'Failed to reload Planisware projects source.' });
+    }
+  });
+
   // Vendor Aliases
+
   app.get('/api/vendors/aliases', (req, res) => {
     res.json(store.getDB().vendorAliases);
   });
@@ -430,7 +548,20 @@ export function createExpressApp() {
 
     let txs = store.getDB().transactions;
     if (snapshotId) txs = txs.filter((t) => t.snapshotId === snapshotId);
-    if (wbs) txs = txs.filter((t) => t.normalizedWbs === wbs);
+    if (wbs) {
+      const candidateCodes = getLinkedWbsCodes(wbs);
+      txs = txs.filter((t) =>
+        candidateCodes.some(
+          (c) =>
+            t.normalizedWbs === c ||
+            t.normalizedWbs?.startsWith(c + '/') ||
+            t.wbs === c ||
+            t.wbs?.startsWith(c + '/')
+        ) ||
+        t.normalizedWbs === wbs ||
+        t.wbs === wbs
+      );
+    }
 
     res.json(txs);
   });

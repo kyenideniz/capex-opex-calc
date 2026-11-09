@@ -7,8 +7,9 @@ import {
   VendorMonthlyDelta,
   WBSMonthlySummary,
 } from '../src/types.js';
-import { includeManualCapex } from './parser.js';
+import { includeManualCapex, isInternalHoursOrCost, normalizeNamePattern } from './parser.js';
 import { resolveProjectName } from '../src/utils/wbsMap.js';
+import { getCarouselOrderIndex, getLinkedWbsCodes } from './planiswareSource.js';
 
 export function getTransactionMonth(t: ImportedTransaction): string {
   if (t.refFiscalYear && t.fromPeriod) {
@@ -19,14 +20,23 @@ export function getTransactionMonth(t: ImportedTransaction): string {
     }
   }
   if (t.postingDate || t.docDate) {
-    const d = new Date(t.postingDate || t.docDate);
+    const raw = String(t.postingDate || t.docDate).trim();
+    const num = Number(raw);
+    if (!isNaN(num) && num > 30000 && num < 60000) {
+      const utc_days = Math.floor(num - 25569);
+      const d = new Date(utc_days * 86400 * 1000);
+      const yr = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      return `${yr}-${m}`;
+    }
+    const d = new Date(raw);
     if (!isNaN(d.getTime())) {
       const yr = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
       return `${yr}-${m}`;
     }
   }
-  return '2026-09';
+  return '2026-10';
 }
 
 export function calculateWBSMonthlySummary(
@@ -35,42 +45,70 @@ export function calculateWBSMonthlySummary(
   currentTxList: ImportedTransaction[],
   previousTxList: ImportedTransaction[],
   project?: Project,
-  monthClose?: MonthCloseConfirmation
+  monthClose?: MonthCloseConfirmation,
+  baselineTxList?: ImportedTransaction[]
 ): { summary: WBSMonthlySummary; warnings: ReviewWarning[] } {
+
   const warnings: ReviewWarning[] = [];
 
   const isOpex = wbs.startsWith('C') || wbs.startsWith('C7941/') || project?.projectType === 'OPEX';
   const projectType: ProjectType = isOpex ? 'OPEX' : 'CAPEX';
   const sourceWbs = isOpex ? (wbs.endsWith('/2/2') ? wbs : `${wbs}/2/2`) : wbs;
-  const cutoffDate = '2026-09-05';
 
-  // Transaction filter predicate based on project type
+  // Retrieve all linked WBS codes (both Capex and Opex counterparts from Planisware export)
+  const candidateCodes = getLinkedWbsCodes(wbs);
+
+  // Transaction filter predicate: strictly enforce external vendor costs only
   const filterTx = (t: ImportedTransaction) => {
     if (t.isExcluded || t.userOverride?.isExcluded) return false;
 
-    if (isOpex) {
-      // OPEX logic: Match sourceWbs or base wbs with document date present
-      const matchesWbs = t.normalizedWbs === sourceWbs || t.normalizedWbs === wbs;
-      const hasDate = Boolean((t.docDate || '').trim() || (t.postingDate || '').trim());
-      if (!matchesWbs || !hasDate) return false;
+    // Check subtotal rows
+    if (t.isSubtotal) return false;
 
-      // Filter by cutoff date if present
-      if (cutoffDate) {
-        const dStr = t.docDate || t.postingDate;
-        if (dStr) {
-          const txTime = new Date(dStr).getTime();
-          const cutoffTime = new Date(cutoffDate).getTime();
-          if (!isNaN(txTime) && !isNaN(cutoffTime) && txTime > cutoffTime) {
-            return false;
-          }
-        }
-      }
-      return true;
-    } else {
-      // CAPEX logic: Match project code directly using includeManualCapex
-      if (t.normalizedWbs !== wbs && t.wbs !== wbs) return false;
-      return includeManualCapex(t);
+    // Match this project, its sub-WBS elements, or any of its paired Capex/Opex codes
+    const matchesWbs =
+      candidateCodes.some((code) => {
+        return (
+          t.normalizedWbs === code ||
+          t.normalizedWbs?.startsWith(code + '/') ||
+          t.wbs === code ||
+          t.wbs?.startsWith(code + '/')
+        );
+      }) ||
+      t.normalizedWbs === wbs ||
+      t.normalizedWbs?.startsWith(wbs + '/') ||
+      (sourceWbs && (t.normalizedWbs === sourceWbs || t.normalizedWbs?.startsWith(sourceWbs + '/'))) ||
+      t.wbs === wbs ||
+      t.wbs?.startsWith(wbs + '/');
+    if (!matchesWbs) return false;
+
+    const activeClass = t.userOverride?.classification || t.classification;
+    if (activeClass === 'CORRECTION_TRANSFER' || activeClass === 'INTERNAL_RECLASS') {
+      return false;
     }
+
+    // Strictly exclude internal labor, internal hours, IT Business Solutions, and mandays
+    if (isInternalHoursOrCost(t)) {
+      return false;
+    }
+
+    const rawName = String(t.nameDescription || '');
+    const normName = normalizeNamePattern(rawName).toLowerCase();
+
+    // Exclude pure cross-reclassification transfer lines
+    if (normName.includes('opex to capex') || normName.includes('reclass: wbs correction')) {
+      return false;
+    }
+
+    const hasDate = Boolean((t.docDate || '').trim() || (t.postingDate || '').trim());
+    const hasPo = Boolean((t.purchasingDoc || '').trim());
+
+    // External cost must have a valid date or purchasing doc, or have explicit EXTERNAL_VENDOR classification
+    if (!hasDate && !hasPo && activeClass !== 'EXTERNAL_VENDOR') {
+      return false;
+    }
+
+    return true;
   };
 
   // Filter current active valid external transactions for this WBS
@@ -79,11 +117,28 @@ export function calculateWBSMonthlySummary(
   // Filter previous active valid external transactions for this WBS
   const previousExternalTx = previousTxList.filter(filterTx);
 
+  // Filter baseline external transactions from old source for comparison
+  const baselineExternalTx = baselineTxList ? baselineTxList.filter(filterTx) : [];
+
+  const isTargetTx = (t: ImportedTransaction) => {
+    return (
+      candidateCodes.some(
+        (c) =>
+          t.normalizedWbs === c ||
+          t.normalizedWbs?.startsWith(c + '/') ||
+          t.wbs === c ||
+          t.wbs?.startsWith(c + '/')
+      ) ||
+      t.normalizedWbs === wbs ||
+      t.wbs === wbs
+    );
+  };
+
   // Internal reclass, correction, and other non-PO totals for current month specifically
   const currentInternalReclass = currentTxList
     .filter(
       (t) =>
-        t.normalizedWbs === wbs &&
+        isTargetTx(t) &&
         t.classification === 'INTERNAL_RECLASS' &&
         !t.isExcluded &&
         getTransactionMonth(t) === reportingMonth
@@ -93,7 +148,7 @@ export function calculateWBSMonthlySummary(
   const currentCorrection = currentTxList
     .filter(
       (t) =>
-        t.normalizedWbs === wbs &&
+        isTargetTx(t) &&
         t.classification === 'CORRECTION_TRANSFER' &&
         !t.isExcluded &&
         getTransactionMonth(t) === reportingMonth
@@ -103,7 +158,7 @@ export function calculateWBSMonthlySummary(
   const currentOtherNonPo = currentTxList
     .filter(
       (t) =>
-        t.normalizedWbs === wbs &&
+        isTargetTx(t) &&
         t.classification === 'OTHER_NON_PO' &&
         !t.isExcluded &&
         getTransactionMonth(t) === reportingMonth
@@ -227,6 +282,30 @@ export function calculateWBSMonthlySummary(
       endDateStr = formatD(currDateObjs[currDateObjs.length - 1]);
     }
 
+    // Check retrospective correction against old baseline source (pre-Sept entries)
+    let hasCorrection = false;
+    let correctionDiff: number | undefined;
+    let oldBalance: number | undefined;
+
+    if (baselineExternalTx.length > 0) {
+      const baseVendorTx = baselineExternalTx.filter((t) => (t.normalizedVendor || '').toUpperCase() === key);
+      const baseBal = baseVendorTx.reduce((sum, t) => sum + t.valueObjectCurr, 0);
+      if (baseBal !== 0 && Math.abs(prevBal - baseBal) > 0.01) {
+        hasCorrection = true;
+        correctionDiff = prevBal - baseBal;
+        oldBalance = baseBal;
+        warnings.push({
+          id: `warn-corr-${wbs}-${vendorDisplay}`,
+          snapshotId: '',
+          wbs,
+          vendor: vendorDisplay,
+          severity: 'warning',
+          type: 'PAST_CORRECTION',
+          message: `WBS ${wbs} / Vendor ${vendorDisplay}: Retrospective correction detected in past entries (baseline EUR ${oldBalance.toFixed(2)}, current past balance EUR ${prevBal.toFixed(2)}, diff EUR ${correctionDiff.toFixed(2)}).`,
+        });
+      }
+    }
+
     // Show in vendor table if non-zero change or active
     vendorDeltas.push({
       vendor: vendorDisplay,
@@ -239,6 +318,9 @@ export function calculateWBSMonthlySummary(
       prevEndDate: prevEndDateStr,
       startDate: startDateStr,
       endDate: endDateStr,
+      hasCorrection,
+      correctionDiff,
+      oldBalance,
     });
   }
 
@@ -292,12 +374,40 @@ export function calculateWBSMonthlySummary(
   allDates.sort();
   const latestPostingDate = allDates.length > 0 ? allDates[allDates.length - 1] : undefined;
 
+  const hasPastCorrection = vendorDeltas.some((v) => v.hasCorrection);
+
+  const hasSeptOctActivity = currentExternalTx.some((t) => {
+    const m = getTransactionMonth(t);
+    return m === '2026-09' || m === '2026-10';
+  });
+
+  let hasDifferenceFromOldSource = false;
+  const hasSpendOrCorrection = Math.abs(totalCurrBalance) > 0.01 || Math.abs(totalPrevBalance) > 0.01 || hasPastCorrection;
+
+  if (hasSpendOrCorrection) {
+    if (baselineTxList && baselineTxList.length > 0) {
+      const baseTotal = baselineExternalTx.reduce((sum, t) => sum + t.valueObjectCurr, 0);
+      const diffFromOld = Math.abs(totalCurrBalance - baseTotal) > 0.01 || currentExternalTx.length !== baselineExternalTx.length;
+      const hasMonthlySpend = Math.abs(totalAddThisMonth) > 0.01;
+      hasDifferenceFromOldSource =
+        diffFromOld ||
+        hasMonthlySpend ||
+        hasPastCorrection ||
+        hasSeptOctActivity ||
+        (baselineExternalTx.length === 0 && currentExternalTx.length > 0);
+    } else {
+      hasDifferenceFromOldSource = Math.abs(totalAddThisMonth) > 0.01 || hasSeptOctActivity;
+    }
+  }
+
+  const carouselOrderIndex = getCarouselOrderIndex(wbs);
+
   const summary: WBSMonthlySummary = {
     wbs,
     projectName: resolveProjectName(wbs, project?.name || `${projectType} Project ${wbs}`),
     projectType,
     sourceWbs,
-    cutoffDate: isOpex ? cutoffDate : undefined,
+    cutoffDate: undefined,
     trackerActual: undefined,
     variance: undefined,
     reportingMonth,
@@ -319,6 +429,9 @@ export function calculateWBSMonthlySummary(
     processedAt: monthClose?.confirmedAt,
     warningsCount: warnings.length,
     vendorDeltas,
+    hasDifferenceFromOldSource,
+    hasPastCorrection,
+    carouselOrderIndex,
   };
 
   return { summary, warnings };

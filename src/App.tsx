@@ -1,18 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { User, WBSMonthlySummary, Project } from './types';
 import { api } from './api';
-import { Navbar } from './components/Navbar';
 import { PMScreen } from './components/PMScreen';
 import { AdminProjectsView } from './components/AdminProjectsView';
 import { AdminUploadModal } from './components/AdminUploadModal';
 import { VendorManagerModal } from './components/VendorManagerModal';
 import { TransactionDetailModal } from './components/TransactionDetailModal';
 import { TestRunnerModal } from './components/TestRunnerModal';
+import { PlaniswareSourceModal } from './components/PlaniswareSourceModal';
 
 export default function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-09');
+  const [selectedMonth, setSelectedMonth] = useState<string>('2026-10');
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string>('CAPEX CJI3');
   const [activeTab, setActiveTab] = useState<'pm' | 'admin'>('pm');
@@ -24,8 +24,10 @@ export default function App() {
   // Modals
   const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
   const [showVendorModal, setShowVendorModal] = useState<boolean>(false);
+  const [showPlaniswareModal, setShowPlaniswareModal] = useState<boolean>(false);
   const [showTestModal, setShowTestModal] = useState<boolean>(false);
   const [inspectWbs, setInspectWbs] = useState<string | null>(null);
+
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
@@ -93,8 +95,14 @@ export default function App() {
       const res = await api.getPmSummary(selectedMonth, pmFilter);
       setSummaries(res.summaries);
 
-      if (res.summaries.length > 0 && (!selectedWbs || !res.summaries.some((s) => s.wbs === selectedWbs))) {
-        setSelectedWbs(res.summaries[0].wbs);
+      if (res.summaries.length > 0) {
+        const updating = res.summaries.filter(
+          (s) => s.hasDifferenceFromOldSource || Math.abs(s.addThisMonth) > 0.001 || s.hasPastCorrection
+        );
+        const preferred = updating[0]?.wbs || res.summaries[0].wbs;
+        if (!selectedWbs || !res.summaries.some((s) => s.wbs === selectedWbs)) {
+          setSelectedWbs(preferred);
+        }
       }
     } catch (e) {
       console.error('Failed to load month summaries:', e);
@@ -132,8 +140,8 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans antialiased selection:bg-blue-100 selection:text-blue-900">
       
-      {/* Main View Area */}
-      <main className="py-6">
+      {/* Main View Area (Top Navbar removed as requested) */}
+      <main className="py-4">
         {activeTab === 'pm' ? (
           <PMScreen
             currentUser={currentUser}
@@ -159,6 +167,7 @@ export default function App() {
             onOpenVendorManager={() => setShowVendorModal(true)}
             onOpenUploadModal={() => setShowUploadModal(true)}
             onViewTransactions={(wbs) => setInspectWbs(wbs)}
+            onOpenPlaniswareModal={() => setShowPlaniswareModal(true)}
           />
         )}
       </main>
@@ -198,6 +207,18 @@ export default function App() {
         <TestRunnerModal onClose={() => setShowTestModal(false)} />
       )}
 
+      {/* MODAL 5: Planisware Project Source & Code Matching */}
+      <PlaniswareSourceModal
+        isOpen={showPlaniswareModal}
+        onClose={() => setShowPlaniswareModal(false)}
+        onApplied={async () => {
+          const pList = await api.getProjects();
+          setProjects(pList);
+          await loadMonthSummaries();
+        }}
+      />
+
     </div>
   );
 }
+

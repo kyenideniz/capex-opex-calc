@@ -9,7 +9,9 @@ import {
   User,
   VendorAlias,
   WBSMonthlySummary,
+  PlaniswareSourceStatus,
 } from './types';
+
 
 const API_BASE = '';
 
@@ -152,4 +154,34 @@ export const api = {
       failed: number;
       results: TestCaseResult[];
     }>(`${API_BASE}/api/tests/run`),
+
+  getPlaniswareStatus: () =>
+    fetchJson<PlaniswareSourceStatus>(`${API_BASE}/api/planisware/status`),
+
+  uploadPlaniswareSource: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return fetchJson<{
+      success: boolean;
+      message: string;
+      filename: string;
+      updatedProjectsCount: number;
+      totalMapped: number;
+      status: PlaniswareSourceStatus;
+    }>(`${API_BASE}/api/planisware/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+  },
+
+  reloadPlaniswareSource: () =>
+    fetchJson<{
+      success: boolean;
+      message: string;
+      syncResult: { updatedProjectsCount: number; totalMapped: number; filename: string };
+      status: PlaniswareSourceStatus;
+    }>(`${API_BASE}/api/planisware/reload`, {
+      method: 'POST',
+    }),
 };
+

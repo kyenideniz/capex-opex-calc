@@ -67,10 +67,145 @@ export const PMScreen: React.FC<PMScreenProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Active summary
-  const activeSummary = summaries.find((s) => s.wbs === selectedWbs) || summaries[0];
+  // Filter only projects that require actuals updating (differences from old source, additions in period, or past corrections)
+  // Deduplicate updatingSummaries so projects with linked Capex & Opex codes are represented once
+  // (preferring the active Capex code that has spend) to maintain the clean queue of 48 projects
+  const updatingSummaries = React.useMemo(() => {
+    const rawUpdating = summaries.filter(
+      (s) =>
+        (s.hasDifferenceFromOldSource || Math.abs(s.addThisMonth) > 0.001 || s.hasPastCorrection) &&
+        (Math.abs(s.previousBalance) > 0.001 || Math.abs(s.addThisMonth) > 0.001 || s.hasPastCorrection)
+    );
+    const seen = new Map<string, WBSMonthlySummary>();
+    rawUpdating.forEach((s) => {
+      const itMatch = s.projectName?.match(/^(IT-[a-zA-Z0-9]+)/);
+      const numMatch = (s.projectName + ' ' + s.wbs).match(/\b(2[0-9]{3}|8[0-9]{3})\b/);
+      const cleanNum = numMatch && numMatch[1] !== '2026' ? numMatch[1] : undefined;
+      const key = cleanNum || (itMatch ? itMatch[1] : s.projectName?.split(' - ')[0] || s.wbs);
+
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, s);
+      } else {
+        if (s.wbs.startsWith('O') && !existing.wbs.startsWith('O')) {
+          seen.set(key, s);
+        } else if (Math.abs(s.addThisMonth) > Math.abs(existing.addThisMonth)) {
+          seen.set(key, s);
+        }
+      }
+    });
+    return Array.from(seen.values());
+  }, [summaries]);
+
+  // Filter mode for combobox: 'all' or 'updating'
+  const [filterMode, setFilterMode] = useState<'all' | 'updating'>('all');
+
+  // Active summary: prioritize currently selected WBS if specified across ALL summaries,
+  // falling back to first updating summary, or first overall summary.
+  const activeSummary =
+    summaries.find((s) => s.wbs === selectedWbs) ||
+    updatingSummaries[0] ||
+    summaries[0];
+
+  const currentCarouselIndex = updatingSummaries.findIndex((s) => {
+    if (s.wbs === activeSummary?.wbs) return true;
+    const itMatchA = s.projectName?.match(/^(IT-[a-zA-Z0-9]+)/);
+    const itMatchB = activeSummary?.projectName?.match(/^(IT-[a-zA-Z0-9]+)/);
+    if (itMatchA && itMatchB && itMatchA[1] === itMatchB[1]) return true;
+    const numA = (s.projectName + ' ' + s.wbs).match(/\b(2[0-9]{3}|8[0-9]{3})\b/);
+    const numB = (activeSummary?.projectName + ' ' + (activeSummary?.wbs || '')).match(/\b(2[0-9]{3}|8[0-9]{3})\b/);
+    if (numA && numB && numA[1] !== '2026' && numA[1] === numB[1]) return true;
+    return false;
+  });
+  const carouselTotal = updatingSummaries.length;
+  const isCurrentInUpdating = currentCarouselIndex >= 0;
+
+  // Auto-align selectedWbs ONLY on initial mount when selectedWbs is completely empty
+  useEffect(() => {
+    if (!selectedWbs && summaries.length > 0) {
+      const initialWbs = updatingSummaries[0]?.wbs || summaries[0]?.wbs;
+      if (initialWbs) {
+        onSelectWbs(initialWbs);
+      }
+    }
+  }, [summaries.length, selectedWbs]);
+
+  const handleNextProject = () => {
+    if (carouselTotal === 0) return;
+    if (currentCarouselIndex >= 0 && currentCarouselIndex < carouselTotal - 1) {
+      onSelectWbs(updatingSummaries[currentCarouselIndex + 1].wbs);
+    } else if (currentCarouselIndex === carouselTotal - 1) {
+      // Loop seamlessly to first project
+      onSelectWbs(updatingSummaries[0].wbs);
+    } else {
+      // If currently viewing a non-updating project, Next jumps directly into the updating carousel at index 0
+      onSelectWbs(updatingSummaries[0].wbs);
+    }
+  };
+
+  const handlePrevProject = () => {
+    if (carouselTotal === 0) return;
+    if (currentCarouselIndex > 0) {
+      onSelectWbs(updatingSummaries[currentCarouselIndex - 1].wbs);
+    } else if (currentCarouselIndex === 0) {
+      // Loop seamlessly to last project
+      onSelectWbs(updatingSummaries[carouselTotal - 1].wbs);
+    } else {
+      // If currently viewing a non-updating project, Prev jumps to last update project
+      onSelectWbs(updatingSummaries[carouselTotal - 1].wbs);
+    }
+  };
+
+  const carouselInfo = {
+    currentIndex: currentCarouselIndex,
+    totalCount: carouselTotal,
+    hasPrev: carouselTotal > 0,
+    hasNext: carouselTotal > 0,
+    isCurrentInUpdating,
+    prevProject: carouselTotal > 0 ? {
+      wbs: updatingSummaries[
+        currentCarouselIndex > 0
+          ? currentCarouselIndex - 1
+          : carouselTotal - 1
+      ].wbs,
+      name: resolveProjectName(
+        updatingSummaries[
+          currentCarouselIndex > 0
+            ? currentCarouselIndex - 1
+            : carouselTotal - 1
+        ].wbs,
+        updatingSummaries[
+          currentCarouselIndex > 0
+            ? currentCarouselIndex - 1
+            : carouselTotal - 1
+        ].projectName
+      ),
+    } : undefined,
+    nextProject: carouselTotal > 0 ? {
+      wbs: updatingSummaries[
+        currentCarouselIndex >= 0 && currentCarouselIndex < carouselTotal - 1
+          ? currentCarouselIndex + 1
+          : 0
+      ].wbs,
+      name: resolveProjectName(
+        updatingSummaries[
+          currentCarouselIndex >= 0 && currentCarouselIndex < carouselTotal - 1
+            ? currentCarouselIndex + 1
+            : 0
+        ].wbs,
+        updatingSummaries[
+          currentCarouselIndex >= 0 && currentCarouselIndex < carouselTotal - 1
+            ? currentCarouselIndex + 1
+            : 0
+        ].projectName
+      ),
+    } : undefined,
+    onPrev: handlePrevProject,
+    onNext: handleNextProject,
+  };
 
   const monthOptions = availableMonths.length > 0 ? availableMonths : [
+    '2026-10',
     '2026-09',
     '2026-08',
     '2026-07',
@@ -93,9 +228,10 @@ export const PMScreen: React.FC<PMScreenProps> = ({
   };
 
   // Filtered summaries for search
+  const basePool = filterMode === 'updating' ? updatingSummaries : summaries;
   const filteredSummaries = searchTerm.trim() === ''
-    ? summaries
-    : summaries.filter((s) => {
+    ? basePool
+    : basePool.filter((s) => {
         const term = searchTerm.toLowerCase();
         const pName = resolveProjectName(s.wbs, s.projectName).toLowerCase();
         const wbsCode = s.wbs.toLowerCase();
@@ -375,15 +511,48 @@ export const PMScreen: React.FC<PMScreenProps> = ({
             <div className="absolute z-40 left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-72 overflow-y-auto">
               {filteredSummaries.length > 0 ? (
                 <div className="p-1 space-y-0.5">
-                  <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider bg-slate-50/80 border-b border-slate-100 flex justify-between items-center">
-                    <span>{filteredSummaries.length} project(s)</span>
-                    <span className="text-[10px] text-slate-400 font-normal">Press Enter ↵ to select</span>
+                  <div className="px-3 py-2 text-[11px] font-semibold text-slate-500 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-2">
+                    <div className="flex items-center space-x-1.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFilterMode('all');
+                        }}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition cursor-pointer ${
+                          filterMode === 'all'
+                            ? 'bg-blue-600 text-white shadow-2xs'
+                            : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        All Projects ({summaries.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFilterMode('updating');
+                        }}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center space-x-1 ${
+                          filterMode === 'updating'
+                            ? 'bg-blue-600 text-white shadow-2xs'
+                            : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>Requires Update ({updatingSummaries.length})</span>
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-normal">
+                      {filteredSummaries.length} showing • Press Enter ↵
+                    </span>
                   </div>
 
                   {filteredSummaries.map((s, idx) => {
                     const isSelected = s.wbs === activeSummary.wbs;
                     const isHighlighted = idx === highlightedIndex;
                     const isOpex = s.projectType === 'OPEX' || s.wbs.startsWith('C') || s.wbs.startsWith('C7941/');
+                    const updateIdx = updatingSummaries.findIndex((u) => u.wbs === s.wbs);
+                    const isUpdating = updateIdx >= 0;
 
                     return (
                       <div
@@ -418,6 +587,15 @@ export const PMScreen: React.FC<PMScreenProps> = ({
                           <span className="text-xs text-slate-600 font-medium truncate">
                             - {resolveProjectName(s.wbs, s.projectName)}
                           </span>
+                          {isUpdating ? (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200 flex-shrink-0">
+                              Update #{updateIdx + 1}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 flex-shrink-0">
+                              Up to date
+                            </span>
+                          )}
                         </div>
 
                         <div className="flex items-center space-x-2 flex-shrink-0">
@@ -452,9 +630,31 @@ export const PMScreen: React.FC<PMScreenProps> = ({
           <div className="text-xs text-amber-900 space-y-1">
             <span className="font-bold">Reconciliation Warnings for WBS {activeSummary.wbs}:</span>
             <p>
-              This project has {activeSummary.warningsCount} notice(s) require review (e.g., negative additions, vendor alias normalizations, or budget status). Click "View calculation details" below for complete audit logs.
+              This project has {activeSummary.warningsCount} notice(s) require review (e.g., negative additions, vendor alias normalizations, or budget status). 
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Zero External Spend / Internal Mandays Policy Notice */}
+      {Math.abs(activeSummary.previousBalance) < 0.01 && Math.abs(activeSummary.addThisMonth) < 0.01 && Math.abs(activeSummary.newBalance) < 0.01 && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-start justify-between gap-4">
+          <div className="flex items-start space-x-3 text-xs text-slate-700">
+            <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <span className="font-bold text-slate-900">No External Vendor Spend Logged in SAP CJI3 for {activeSummary.wbs}</span>
+              <p className="text-slate-600 leading-relaxed">
+                This project has <strong>€0.00</strong> in external contractor or consulting spend. Internal labor, mandays, and IT Business Solutions are excluded from manual Planisware entry per cost accounting policy.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onViewCalculationDetails(activeSummary.wbs)}
+            className="flex-shrink-0 px-3 py-1.5 bg-white hover:bg-slate-100 text-blue-700 border border-slate-300 rounded-xl text-xs font-bold transition shadow-2xs"
+          >
+            Inspect SAP Transactions
+          </button>
         </div>
       )}
 
@@ -470,7 +670,7 @@ export const PMScreen: React.FC<PMScreenProps> = ({
             {formatEUR(activeSummary.previousBalance)}
           </div>
           <div className="mt-2 text-xs text-slate-400 font-medium">
-            Cumulative external actuals in prior accepted SAP snapshot
+            Pre-September 2026 balance in baseline accepted source
           </div>
         </div>
 
@@ -492,7 +692,7 @@ export const PMScreen: React.FC<PMScreenProps> = ({
             {activeSummary.addThisMonth > 0 ? `+${formatEUR(activeSummary.addThisMonth)}` : formatEUR(activeSummary.addThisMonth)}
           </div>
           <div className="mt-2 text-xs text-blue-900/80 font-medium">
-            Net external vendor addition to enter into Planisware for {reportingMonth}
+            Combined additions (Sept + Oct) to enter into Planisware
           </div>
         </div>
 
@@ -505,7 +705,7 @@ export const PMScreen: React.FC<PMScreenProps> = ({
             {formatEUR(activeSummary.newBalance)}
           </div>
           <div className="mt-2 text-xs text-slate-400 font-medium">
-            Resulting cumulative external actual balance in Planisware
+            Resulting cumulative external actual balance through October 31, 2026
           </div>
         </div>
       </div>
@@ -514,6 +714,10 @@ export const PMScreen: React.FC<PMScreenProps> = ({
       <PlaniswareView
         summary={activeSummary}
         reportingMonth={reportingMonth}
+        onViewCalculationDetails={() => onViewCalculationDetails(activeSummary.wbs)}
+        carouselInfo={carouselInfo}
+        allSummaries={summaries}
+        onSelectWbs={onSelectWbs}
       />
     </div>
   );

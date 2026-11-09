@@ -6,8 +6,24 @@ for (const [k, v] of Object.entries(wbsMappingData as Record<string, string>)) {
 }
 
 /**
+ * Update WBS name mapping dynamically at runtime
+ */
+export function updateWbsMapping(newMap: Record<string, string>) {
+  for (const [k, v] of Object.entries(newMap)) {
+    normMap[k.toUpperCase()] = v;
+  }
+}
+
+/**
+ * Return current mapping snapshot
+ */
+export function getWbsMapping(): Record<string, string> {
+  return { ...normMap };
+}
+
+/**
  * Resolves WBS Element code to its exact Portfolio Project Name
- * imported from PLW_Portfolio_Export.csv
+ * imported from export-809912-2109-20261101-191220.xlsx / Planisware export
  */
 export function resolveProjectName(wbs: string, fallbackName?: string): string {
   if (!wbs) return fallbackName || '';
@@ -36,5 +52,12 @@ export function resolveProjectName(wbs: string, fallbackName?: string): string {
     if (normMap[alt]) return normMap[alt];
   }
 
+  // 4. Try matching by sub-project code (e.g. 2595, 2689)
+  if (parts.length >= 2 && parts[1]) {
+    const numPart = parts[1];
+    if (normMap[numPart]) return normMap[numPart];
+  }
+
   return fallbackName || `Project ${wbs}`;
 }
+

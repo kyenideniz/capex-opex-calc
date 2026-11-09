@@ -2,12 +2,15 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ArrowUp,
   Check,
   ClipboardCheck,
   CheckCircle2,
   Copy,
-  Info
+  Info,
+  AlertTriangle,
 } from 'lucide-react';
 import { WBSMonthlySummary } from '../types';
 import { resolveProjectName } from '../utils/wbsMap';
@@ -136,12 +139,35 @@ export interface PlaniswareRow {
   startDate: string;
   endDate: string;
   isUpdate?: boolean;
+  hasCorrection?: boolean;
+  correctionDiff?: number;
+  oldBalance?: number;
+}
+
+export interface CarouselProject {
+  wbs: string;
+  name: string;
+}
+
+export interface CarouselInfo {
+  currentIndex: number;
+  totalCount: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+  isCurrentInUpdating?: boolean;
+  prevProject?: CarouselProject;
+  nextProject?: CarouselProject;
+  onPrev: () => void;
+  onNext: () => void;
 }
 
 interface PlaniswareViewProps {
   summary: WBSMonthlySummary;
   reportingMonth: string;
   onViewCalculationDetails?: () => void;
+  carouselInfo?: CarouselInfo;
+  allSummaries?: WBSMonthlySummary[];
+  onSelectWbs?: (wbs: string) => void;
 }
 
 // Columns strictly configured to: Quantity, Unit, SAP WBS Element, Label, Type, Start date, End date
@@ -163,6 +189,9 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
   summary,
   reportingMonth,
   onViewCalculationDetails,
+  carouselInfo,
+  allSummaries,
+  onSelectWbs,
 }) => {
   const [activeTab] = useState<'Actual' | 'Planned' | 'Budget'>('Actual');
 
@@ -176,6 +205,30 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
       : 'CAPEX-CAPEX-External consultants/contractors'
   );
   const [resource, setResource] = useState('');
+
+  // Dropdown state for Task or WBS Element selector
+  const [isWbsDropdownOpen, setIsWbsDropdownOpen] = useState(false);
+  const [wbsDropdownSearch, setWbsDropdownSearch] = useState('');
+  const wbsDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (wbsDropdownRef.current && !wbsDropdownRef.current.contains(e.target as Node)) {
+        setIsWbsDropdownOpen(false);
+        setWbsDropdownSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Filtered list for the Task or WBS element dropdown
+  const filteredDropdownSummaries = (allSummaries || []).filter((s) => {
+    if (!wbsDropdownSearch.trim()) return true;
+    const term = wbsDropdownSearch.toLowerCase();
+    const pName = resolveProjectName(s.wbs, s.projectName).toLowerCase();
+    return s.wbs.toLowerCase().includes(term) || pName.includes(term);
+  });
 
   // Keep form fields synced with selected WBS
   useEffect(() => {
@@ -206,7 +259,7 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
       (v) => Math.abs(v.previousBalance) > 0.001 || Math.abs(v.addThisMonth) > 0.001 || Math.abs(v.newBalance) > 0.001
     );
 
-    // 1. TOP ENTRIES: Cumulative totals for previous month(s) per vendor (READ ONLY)
+    // 1. TOP ENTRIES: Cumulative totals for previous month(s) per vendor
     activeVendors.forEach((v, idx) => {
       const startDate = v.prevStartDate || v.startDate || prevStartDate;
       const endDate = v.prevEndDate || v.endDate || prevEndDate;
@@ -221,6 +274,9 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
         startDate: startDate,
         endDate: endDate,
         isUpdate: false,
+        hasCorrection: Boolean(v.hasCorrection),
+        correctionDiff: v.correctionDiff,
+        oldBalance: v.oldBalance,
       });
     });
 
@@ -311,71 +367,7 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
     }
   };
 
-  // COPY PASTE LOGIC: Strictly restricted to This Month's Update Rows
-  const copySelectionToClipboard = useCallback(async () => {
-    if (currentRows.length === 0) return;
-
-    const sanitizeVal = (val: any) => {
-      if (val === null || val === undefined) return '';
-      return String(val).replace(/[\t\r\n]/g, ' ');
-    };
-
-    // Filter to ONLY this month's update rows so previous subtotals are never copied
-    const updateRowsOnly = currentRows.filter((r) => r.isUpdate);
-    const candidateRows = updateRowsOnly.length > 0 ? updateRowsOnly : currentRows.slice(-1);
-
-    let tsvOutput = '';
-    let htmlOutput = '<table>';
-
-    if (selectedRowIds.size > 0) {
-      const selectedRowsList = candidateRows.filter((r) => selectedRowIds.has(r.id));
-      const targetRows = selectedRowsList.length > 0 ? selectedRowsList : candidateRows;
-      const rowLines = targetRows.map((r) => {
-        const values = currentColumns.map((col) => sanitizeVal((r as any)[col.key]));
-        htmlOutput += `<tr>${values.map((v) => `<td>${v}</td>`).join('')}</tr>`;
-        return values.join('\t');
-      });
-      tsvOutput = rowLines.join('\r\n');
-    } else if (selectionRange) {
-      const minR = Math.max(0, Math.min(selectionRange.startRow, selectionRange.endRow));
-      const maxR = Math.min(currentRows.length - 1, Math.max(selectionRange.startRow, selectionRange.endRow));
-      const minC = Math.max(0, Math.min(selectionRange.startCol, selectionRange.endCol));
-      const maxC = Math.min(currentColumns.length - 1, Math.max(selectionRange.startCol, selectionRange.endCol));
-
-      const lines = [];
-      for (let r = minR; r <= maxR; r++) {
-        const rowData = currentRows[r];
-        if (!rowData || !rowData.isUpdate) continue; // Skip non-update rows
-        const cellVals = [];
-        htmlOutput += '<tr>';
-        for (let c = minC; c <= maxC; c++) {
-          const colKey = currentColumns[c].key;
-          const val = sanitizeVal((rowData as any)[colKey]);
-          cellVals.push(val);
-          htmlOutput += `<td>${val}</td>`;
-        }
-        htmlOutput += '</tr>';
-        lines.push(cellVals.join('\t'));
-      }
-      tsvOutput = lines.join('\r\n');
-      if (!tsvOutput) {
-        // Fallback to all candidate update rows if selection contained no update rows
-        const rowLines = candidateRows.map((r) => {
-          const values = currentColumns.map((col) => sanitizeVal((r as any)[col.key]));
-          return values.join('\t');
-        });
-        tsvOutput = rowLines.join('\r\n');
-      }
-    } else {
-      const rowLines = candidateRows.map((r) => {
-        const values = currentColumns.map((col) => sanitizeVal((r as any)[col.key]));
-        htmlOutput += `<tr>${values.map((v) => `<td>${v}</td>`).join('')}</tr>`;
-        return values.join('\t');
-      });
-      tsvOutput = rowLines.join('\r\n');
-    }
-    htmlOutput += '</table>';
-
+  const executeClipboardWrite = async (tsvOutput: string, htmlOutput: string, successMessage: string) => {
     setLastCopiedString(tsvOutput);
 
     let copiedSuccessfully = false;
@@ -406,11 +398,103 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
     }
 
     if (copiedSuccessfully) {
-      showToast(`Copied update values to clipboard (Planisware format)`);
+      showToast(successMessage);
     } else {
       setShowCopyModal(true);
     }
-  }, [activeTab, currentRows, currentColumns, selectedRowIds, selectionRange]);
+  };
+
+  // COPY PASTE LOGIC:
+  // CRITICAL USER INSTRUCTION: 'sapWbsElement' column MUST be uncopyable / processed as blank ""
+  // so informational text ("Previous Total", "CORRECTION", "This Month") is NEVER pasted into Planisware!
+  const copySelectionToClipboard = useCallback(async () => {
+    if (currentRows.length === 0) return;
+
+    const sanitizeVal = (val: any) => {
+      if (val === null || val === undefined) return '';
+      return String(val).replace(/[\t\r\n]/g, ' ');
+    };
+
+    // Which rows to copy:
+    // 1) Explicitly selected rows via checkbox
+    // 2) Selection range if dragged
+    // 3) Default: update rows + any past correction rows (or candidate rows)
+    let targetRows: PlaniswareRow[] = [];
+    if (selectedRowIds.size > 0) {
+      targetRows = currentRows.filter((r) => selectedRowIds.has(r.id));
+    } else if (selectionRange) {
+      const minR = Math.max(0, Math.min(selectionRange.startRow, selectionRange.endRow));
+      const maxR = Math.min(currentRows.length - 1, Math.max(selectionRange.startRow, selectionRange.endRow));
+      targetRows = currentRows.slice(minR, maxR + 1);
+    } else {
+      const updateOrCorrected = currentRows.filter((r) => r.isUpdate || r.hasCorrection);
+      targetRows = updateOrCorrected.length > 0 ? updateOrCorrected : currentRows;
+    }
+
+    let tsvOutput = '';
+    let htmlOutput = '<table>';
+
+    const rowLines = targetRows.map((r) => {
+      const values = currentColumns.map((col) => {
+        // Enforce strict blank for sapWbsElement column
+        if (col.key === 'sapWbsElement') return '';
+        return sanitizeVal((r as any)[col.key]);
+      });
+      htmlOutput += `<tr>${values.map((v) => `<td>${v}</td>`).join('')}</tr>`;
+      return values.join('\t');
+    });
+
+    tsvOutput = rowLines.join('\r\n');
+    htmlOutput += '</table>';
+
+    await executeClipboardWrite(tsvOutput, htmlOutput, `Copied ${targetRows.length} entry/entries to clipboard (Planisware format)`);
+  }, [currentRows, currentColumns, selectedRowIds, selectionRange]);
+
+  // Copy all project entries (lifetime transactions)
+  const copyAllLifetimeEntries = useCallback(async () => {
+    if (currentRows.length === 0) return;
+
+    const sanitizeVal = (val: any) => {
+      if (val === null || val === undefined) return '';
+      return String(val).replace(/[\t\r\n]/g, ' ');
+    };
+
+    let tsvOutput = '';
+    let htmlOutput = '<table>';
+
+    const rowLines = currentRows.map((r) => {
+      const values = currentColumns.map((col) => {
+        if (col.key === 'sapWbsElement') return '';
+        return sanitizeVal((r as any)[col.key]);
+      });
+      htmlOutput += `<tr>${values.map((v) => `<td>${v}</td>`).join('')}</tr>`;
+      return values.join('\t');
+    });
+
+    tsvOutput = rowLines.join('\r\n');
+    htmlOutput += '</table>';
+
+    await executeClipboardWrite(tsvOutput, htmlOutput, `Copied all ${currentRows.length} lifetime entries to clipboard`);
+  }, [currentRows, currentColumns]);
+
+  // Keyboard navigation for Carousel (ArrowLeft / ArrowRight)
+  useEffect(() => {
+    const handleKeyNav = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      if (e.key === 'ArrowLeft' && carouselInfo?.hasPrev) {
+        e.preventDefault();
+        carouselInfo.onPrev();
+      } else if (e.key === 'ArrowRight' && carouselInfo?.hasNext) {
+        e.preventDefault();
+        carouselInfo.onNext();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyNav);
+    return () => window.removeEventListener('keydown', handleKeyNav);
+  }, [carouselInfo]);
 
   // EXACT PASTE DATA LOGIC FROM USER'S CODE
   const handlePasteData = useCallback(
@@ -553,22 +637,18 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
   };
 
   const handleSelectAllHeader = () => {
-    const updateRows = currentRows.filter((r) => r.isUpdate);
-    if (updateRows.length === 0) return;
-
-    if (selectedRowIds.size === updateRows.length) {
+    if (selectedRowIds.size === currentRows.length) {
       setSelectedRowIds(new Set());
       setSelectionRange(null);
       setActiveCell(null);
     } else {
-      const updateIds = new Set(updateRows.map((r) => r.id));
-      setSelectedRowIds(updateIds);
+      setSelectedRowIds(new Set(currentRows.map((r) => r.id)));
     }
   };
 
   const getCellMeta = (rIdx: number, cIdx: number) => {
     const row = currentRows[rIdx];
-    if (!row || !row.isUpdate) {
+    if (!row) {
       return { isSelected: false, isAnchor: false };
     }
 
@@ -754,21 +834,117 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
                 <h2 className="text-[15px] font-bold text-[#202733] mb-3">Identification</h2>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-3 max-w-[800px]">
-                  <div className="flex items-center justify-between gap-2 cursor-not-allowed" title="Field read-only">
-                    <div className="flex items-center gap-1.5 text-[13.5px] text-[#252D3A] whitespace-nowrap cursor-not-allowed">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[13.5px] text-[#252D3A] whitespace-nowrap">
                       <span>Task or WBS element *</span>
                       <OpenInWindowIcon className="w-3.5 h-3.5 text-[#9CA3AF]" />
                     </div>
-                    <div className="flex items-center justify-between border-b border-slate-300 pb-0.5 w-[185px] bg-slate-50/60 rounded-t px-1 select-none cursor-not-allowed">
-                      <input
-                        type="text"
-                        readOnly
-                        disabled
-                        tabIndex={-1}
-                        value={taskWbs}
-                        className="text-[13px] text-[#202733] bg-transparent focus:outline-none w-full truncate cursor-not-allowed select-none font-medium"
-                      />
-                      <ChevronDown className="w-4 h-4 text-slate-400 cursor-not-allowed flex-shrink-0" />
+                    <div ref={wbsDropdownRef} className="relative">
+                      <div
+                        onClick={() => {
+                          if (onSelectWbs && allSummaries && allSummaries.length > 0) {
+                            setIsWbsDropdownOpen((prev) => !prev);
+                            setWbsDropdownSearch('');
+                          }
+                        }}
+                        className={`flex items-center justify-between border-b pb-0.5 w-[210px] sm:w-[240px] rounded-t px-1.5 select-none transition ${
+                          onSelectWbs
+                            ? 'border-blue-400 bg-white hover:bg-blue-50/70 cursor-pointer shadow-2xs ring-1 ring-blue-300/40'
+                            : 'border-slate-300 bg-slate-50/60 cursor-not-allowed'
+                        }`}
+                        title={onSelectWbs ? 'Click to select or search any project in portfolio' : 'Task or WBS element'}
+                      >
+                        <input
+                          type="text"
+                          readOnly
+                          value={taskWbs}
+                          title={taskWbs}
+                          className="text-[12.5px] text-[#202733] bg-transparent focus:outline-none w-full truncate font-medium cursor-pointer"
+                        />
+                        <ChevronDown className={`w-4 h-4 flex-shrink-0 transition-transform ${
+                          isWbsDropdownOpen ? 'rotate-180 text-blue-600' : 'text-slate-500'
+                        }`} />
+                      </div>
+
+                      {/* Dropdown Menu for Task or WBS Element */}
+                      {isWbsDropdownOpen && onSelectWbs && allSummaries && (
+                        <div className="absolute right-0 top-full mt-1.5 w-80 md:w-96 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 overflow-hidden max-h-72 flex flex-col">
+                          <div className="p-2 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
+                            <input
+                              type="text"
+                              autoFocus
+                              value={wbsDropdownSearch}
+                              onChange={(e) => setWbsDropdownSearch(e.target.value)}
+                              placeholder="Search any WBS or project name..."
+                              className="w-full px-2.5 py-1 text-xs border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            {wbsDropdownSearch && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setWbsDropdownSearch('');
+                                }}
+                                className="text-slate-400 hover:text-slate-600 text-xs px-1"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                          <div className="overflow-y-auto flex-1 divide-y divide-slate-100 p-1">
+                            {filteredDropdownSummaries.length > 0 ? (
+                              filteredDropdownSummaries.map((s) => {
+                                const isSel = s.wbs === summary.wbs;
+                                const isOpex = s.projectType === 'OPEX' || s.wbs.startsWith('C') || s.wbs.startsWith('C7941/');
+                                const isUpdate = s.hasDifferenceFromOldSource || Math.abs(s.addThisMonth) > 0.001 || s.hasPastCorrection;
+                                return (
+                                  <button
+                                    key={s.wbs}
+                                    type="button"
+                                    onClick={() => {
+                                      onSelectWbs(s.wbs);
+                                      setIsWbsDropdownOpen(false);
+                                      setWbsDropdownSearch('');
+                                    }}
+                                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 transition cursor-pointer ${
+                                      isSel
+                                        ? 'bg-blue-50 font-bold text-blue-900 ring-1 ring-blue-300/60'
+                                        : 'hover:bg-slate-50 text-slate-700'
+                                    }`}
+                                  >
+                                    <div className="truncate flex items-center space-x-1.5 min-w-0">
+                                      <span className={`text-[9px] uppercase font-extrabold px-1 py-0.5 rounded border flex-shrink-0 ${
+                                        isOpex ? 'bg-purple-100 text-purple-800 border-purple-200' : 'bg-blue-100 text-blue-800 border-blue-200'
+                                      }`}>
+                                        {isOpex ? 'OPEX' : 'CAPEX'}
+                                      </span>
+                                      <span className="font-mono text-[11px] font-bold text-slate-800 flex-shrink-0">{s.wbs}</span>
+                                      <span className="truncate text-slate-500 text-[11px]">- {resolveProjectName(s.wbs, s.projectName)}</span>
+                                    </div>
+                                    <div className="flex items-center space-x-1 flex-shrink-0">
+                                      {isUpdate ? (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                                          Update
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] font-normal px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                                          Up to date
+                                        </span>
+                                      )}
+                                      {isSel && <Check className="w-3 h-3 text-blue-600 stroke-[3]" />}
+                                    </div>
+                                  </button>
+                                );
+                              })
+                            ) : (
+                              <div className="py-4 text-center text-xs text-slate-400">
+                                No matching project found
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -812,36 +988,78 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
                 </div>
               </div>
 
+              {/* Retrospective Past Correction Warning Banner */}
+              {summary.hasPastCorrection && (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-xs">
+                  <div className="flex items-start sm:items-center space-x-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5 sm:mt-0" />
+                    <span>
+                      <strong className="font-bold text-amber-900">Past Entry Correction Detected:</strong> A past transaction amount changed in the new source file. Look for the orange <strong className="text-amber-700">CORRECTION</strong> badge below. Edit the existing past entry in Planisware instead of creating a duplicate line.
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={copyAllLifetimeEntries}
+                      className="bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold px-3 py-1.5 rounded transition cursor-pointer shadow-xs"
+                      title="Copy all rows including past entries (with blank SAP WBS column)"
+                    >
+                      Copy All Entries
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Instruction Banner - Dynamic Green for zero updates / Indigo for active updates */}
               {Math.abs(summary.addThisMonth) > 0.001 ? (
-                <div className="bg-[#EEF2FF] border border-[#C7D2FE] rounded-lg p-3 text-xs text-[#312E81] flex items-center justify-between gap-2 shadow-xs">
+                <div className="bg-[#EEF2FF] border border-[#C7D2FE] rounded-lg p-3 text-xs text-[#312E81] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs">
                   <div className="flex items-center space-x-2">
                     <Info className="w-4 h-4 text-[#4338CA] flex-shrink-0" />
                     <span>
-                      Copy and paste all cells for this month in Planisware with the row that says{' '}
-                      <strong className="font-bold text-[#1E1B4B]">{formattedUpdateTotal}</strong> for{' '}
-                      <strong className="font-bold text-[#1E1B4B]">{monthTitle}</strong>
+                      Add to Planisware for <strong className="font-bold text-[#1E1B4B]">{monthTitle}</strong> (Sept + Oct additions combined):{' '}
+                      <strong className="font-bold text-[#1E1B4B]">{formattedUpdateTotal}</strong>
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={copySelectionToClipboard}
-                    className="bg-[#4338CA] hover:bg-[#3730A3] text-white text-[11px] font-bold px-3.5 py-1.5 rounded transition-colors flex-shrink-0 cursor-pointer shadow-xs"
-                  >
-                    Copy This Month Values
-                  </button>
+                  <div className="flex items-center space-x-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={copySelectionToClipboard}
+                      className="bg-[#4338CA] hover:bg-[#3730A3] text-white text-[11px] font-bold px-3.5 py-1.5 rounded transition-colors cursor-pointer shadow-xs"
+                      title="Copy update values (with blank SAP WBS column)"
+                    >
+                      Copy This Month Values
+                    </button>
+                    <button
+                      type="button"
+                      onClick={copyAllLifetimeEntries}
+                      className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-[11px] font-bold px-3 py-1.5 rounded transition-colors cursor-pointer shadow-xs"
+                      title="Copy all lifetime rows for project"
+                    >
+                      Copy All Rows
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <div className="bg-emerald-50 border border-emerald-200/90 rounded-lg p-3 text-xs text-emerald-900 flex items-center justify-between gap-2 shadow-xs">
+                <div className="bg-emerald-50 border border-emerald-200/90 rounded-lg p-3 text-xs text-emerald-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs">
                   <div className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
                     <span>
-                      No updates for the period of <strong className="font-bold text-emerald-950">{monthTitle}</strong>. Nothing to be added in Planisware.
+                      No new additions for <strong className="font-bold text-emerald-950">{monthTitle}</strong>.
+                      {summary.hasPastCorrection ? ' (Review the orange past correction badge in the table).' : ' Nothing to be added in Planisware.'}
                     </span>
                   </div>
-                  <span className="bg-emerald-100/80 text-emerald-800 text-[11px] font-bold px-3 py-1 rounded border border-emerald-200/60 flex-shrink-0">
-                    0.00 €
-                  </span>
+                  <div className="flex items-center space-x-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={copyAllLifetimeEntries}
+                      className="bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 text-[11px] font-bold px-3 py-1.5 rounded transition cursor-pointer"
+                    >
+                      Copy All Rows
+                    </button>
+                    <span className="bg-emerald-100/80 text-emerald-800 text-[11px] font-bold px-3 py-1 rounded border border-emerald-200/60">
+                      0.00 €
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -909,36 +1127,44 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
                       {currentRows.map((row, rIdx) => {
                         const isRowSelected = selectedRowIds.has(row.id);
                         const isUpdateRow = row.isUpdate;
+                        const isCorrectedRow = row.hasCorrection;
 
                         return (
                           <tr
                             key={row.id}
-                            className={`border-b border-[#EDF2F7] transition-colors ${
-                              isUpdateRow
-                                ? 'bg-blue-50/50 hover:bg-blue-100/50 font-semibold cursor-pointer'
-                                : 'bg-slate-50/70 hover:bg-slate-100/80 cursor-not-allowed opacity-85'
+                            className={`border-b border-[#EDF2F7] transition-colors cursor-pointer ${
+                              isRowSelected
+                                ? 'bg-blue-100/70 font-semibold'
+                                : isCorrectedRow
+                                ? 'bg-amber-50/80 hover:bg-amber-100/70 font-semibold'
+                                : isUpdateRow
+                                ? 'bg-blue-50/50 hover:bg-blue-100/50 font-semibold'
+                                : 'bg-slate-50/70 hover:bg-slate-100/80 opacity-90'
                             }`}
                             title={
-                              isUpdateRow
-                                ? "This Month's Update Entry (Click / Drag to select, or copy with Copy button)"
-                                : 'Previous Months Subtotal (Read-Only reference, cannot be selected or copied)'
+                              isCorrectedRow
+                                ? `Retrospective correction! Was €${row.oldBalance?.toFixed(2)}, new balance €${row.quantity} (Difference: €${((row.correctionDiff || 0) > 0 ? '+' : '') + (row.correctionDiff || 0).toFixed(2)}). Edit past entry in Planisware.`
+                                : isUpdateRow
+                                ? "This Month's Update Entry (Click to select, or copy with Copy button)"
+                                : 'Previous Period Total'
                             }
                           >
                             <td
-                              className={`py-2 px-2 text-center transition-colors ${
-                                isUpdateRow ? 'cursor-pointer' : 'cursor-not-allowed bg-slate-100/60'
-                              } ${isRowSelected ? 'bg-[#BFCEF5]' : isUpdateRow ? 'bg-blue-50/70' : ''}`}
-                              onClick={() => isUpdateRow && handleRowCheckboxToggle(row.id, rIdx)}
+                              className={`py-2 px-2 text-center transition-colors cursor-pointer ${
+                                isRowSelected ? 'bg-[#BFCEF5]' : isCorrectedRow ? 'bg-amber-100/50' : isUpdateRow ? 'bg-blue-50/70' : ''
+                              }`}
+                              onClick={() => handleRowCheckboxToggle(row.id, rIdx)}
                             >
                               <button
                                 type="button"
-                                disabled={!isUpdateRow}
-                                className={`w-4 h-4 rounded-[3px] border flex items-center justify-center transition-colors mx-auto ${
+                                className={`w-4 h-4 rounded-[3px] border flex items-center justify-center transition-colors mx-auto cursor-pointer ${
                                   isRowSelected
                                     ? 'bg-[#D81B60] border-[#D81B60] text-white shadow-sm'
+                                    : isCorrectedRow
+                                    ? 'border-amber-400 bg-white hover:bg-amber-50'
                                     : isUpdateRow
-                                    ? 'border-[#BAC7D5] bg-white cursor-pointer'
-                                    : 'border-slate-300 bg-slate-200/50 cursor-not-allowed'
+                                    ? 'border-[#BAC7D5] bg-white hover:bg-blue-50'
+                                    : 'border-slate-300 bg-white hover:bg-slate-50'
                                 }`}
                               >
                                 {isRowSelected && <Check className="w-3 h-3 stroke-[3]" />}
@@ -954,13 +1180,15 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
                                   key={col.key}
                                   onMouseDown={(e) => handleCellMouseDown(rIdx, cIdx, e)}
                                   onMouseEnter={() => handleCellMouseEnter(rIdx, cIdx)}
-                                  className={`py-2 px-1.5 whitespace-nowrap overflow-hidden text-ellipsis relative text-[#1F2937] transition-colors ${
-                                    isUpdateRow
-                                      ? 'cursor-cell hover:bg-blue-100/70'
-                                      : 'cursor-not-allowed bg-slate-100/40 text-slate-600 select-none'
-                                  } ${meta.isSelected ? 'bg-[#BFCEF5]' : isUpdateRow ? 'bg-blue-50/50 font-semibold' : ''}`}
+                                  className={`py-2 px-1.5 whitespace-nowrap overflow-hidden text-ellipsis relative text-[#1F2937] transition-colors cursor-cell ${
+                                    isCorrectedRow
+                                      ? 'hover:bg-amber-100/80'
+                                      : isUpdateRow
+                                      ? 'hover:bg-blue-100/70'
+                                      : 'hover:bg-slate-100/60'
+                                  } ${meta.isSelected ? 'bg-[#BFCEF5]' : ''}`}
                                 >
-                                  {meta.isSelected && isUpdateRow && (
+                                  {meta.isSelected && (
                                     <div
                                       className={`absolute inset-0 pointer-events-none z-10 ${
                                         meta.isTop ? 'border-t-2 border-[#5473E8]' : ''
@@ -976,18 +1204,24 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
 
                                   <div className="flex items-center justify-between space-x-1.5 truncate">
                                     {col.key === 'sapWbsElement' ? (
-                                      <>
-                                        <span className="truncate">{val}</span>
-                                        {isUpdateRow ? (
-                                          <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.2 rounded font-sans font-bold uppercase tracking-tight flex-shrink-0">
+                                      <div className="flex items-center space-x-1.5 truncate">
+                                        {isCorrectedRow ? (
+                                          <span
+                                            className="text-[10px] bg-amber-500 hover:bg-amber-600 text-white font-extrabold px-2 py-0.5 rounded uppercase tracking-tight flex-shrink-0 shadow-xs cursor-help"
+                                            title={`Past entry correction! Baseline was €${row.oldBalance?.toFixed(2)}, new past total €${row.quantity} (Difference: €${((row.correctionDiff || 0) > 0 ? '+' : '') + (row.correctionDiff || 0).toFixed(2)}). Edit past entry in Planisware.`}
+                                          >
+                                            CORRECTION
+                                          </span>
+                                        ) : isUpdateRow ? (
+                                          <span className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded font-sans font-bold uppercase tracking-tight flex-shrink-0">
                                             This Month
                                           </span>
                                         ) : (
-                                          <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.2 rounded font-sans font-medium uppercase tracking-tight flex-shrink-0">
+                                          <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-sans font-medium uppercase tracking-tight flex-shrink-0">
                                             Previous Total
                                           </span>
                                         )}
-                                      </>
+                                      </div>
                                     ) : (
                                       <span className="truncate">{val}</span>
                                     )}
@@ -1071,6 +1305,75 @@ export const PlaniswareView: React.FC<PlaniswareViewProps> = ({
           </svg>
         </div>
       </div>
+
+      {/* Sequential Carousel Navigation Bar directly under Planisware actuals window */}
+      {carouselInfo && carouselInfo.totalCount > 0 && (
+        <div className="w-full max-w-[1040px] mt-4 bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center space-x-3 w-full sm:w-auto justify-between sm:justify-start">
+            <button
+              type="button"
+              onClick={carouselInfo.onPrev}
+              disabled={!carouselInfo.hasPrev}
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center space-x-2 transition-all ${
+                carouselInfo.hasPrev
+                  ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-sm cursor-pointer active:scale-95'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+              }`}
+              title={carouselInfo.prevProject ? `Previous: ${carouselInfo.prevProject.wbs} (${carouselInfo.prevProject.name})` : 'No previous project requiring update'}
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Previous Project</span>
+            </button>
+
+            {carouselInfo.currentIndex >= 0 ? (
+              <div className="flex items-center space-x-1.5 px-3.5 py-2 bg-blue-50/80 border border-blue-200 rounded-xl text-xs font-mono font-bold text-blue-900 shadow-2xs">
+                <span className="text-slate-500 font-sans font-medium text-[11px]">Updating:</span>
+                <span className="text-blue-700 bg-white px-2 py-0.5 rounded-md shadow-2xs border border-blue-200 font-extrabold">
+                  {carouselInfo.currentIndex + 1}
+                </span>
+                <span className="text-slate-400">/</span>
+                <span className="text-slate-700">{carouselInfo.totalCount}</span>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-2 px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-700 shadow-2xs">
+                <span className="text-slate-500 font-sans font-medium text-[11px]">Portfolio View:</span>
+                <span className="text-blue-700 bg-white px-2 py-0.5 rounded-md border border-blue-200 font-extrabold text-[11px]">
+                  {carouselInfo.totalCount} updates pending
+                </span>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={carouselInfo.onNext}
+              disabled={!carouselInfo.hasNext}
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center space-x-2 transition-all ${
+                carouselInfo.hasNext
+                  ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm cursor-pointer active:scale-95'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+              }`}
+              title={
+                carouselInfo.currentIndex >= 0
+                  ? (carouselInfo.nextProject ? `Next: ${carouselInfo.nextProject.wbs} (${carouselInfo.nextProject.name})` : 'Next project requiring update')
+                  : `Resume update sequence at #1 (${carouselInfo.nextProject?.wbs || 'First update'})`
+              }
+            >
+              <span>{carouselInfo.currentIndex >= 0 ? 'Next Project' : 'Resume Updates'}</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center space-x-2 text-xs text-slate-500">
+            <span className="font-semibold text-slate-700">Export Sequence:</span>
+            <span className="text-slate-600 truncate max-w-[280px] md:max-w-md">
+              {carouselInfo.totalCount} project(s) requiring actuals entry
+            </span>
+            <span className="hidden md:inline text-slate-400 font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+              ← / →
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Sandboxed Iframe Fallback Modal */}
       {showCopyModal && (

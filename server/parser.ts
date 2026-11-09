@@ -41,8 +41,132 @@ export function normalizeNamePattern(rawName: string | undefined): string {
 }
 
 /**
- * CAPEX Manual Cost Inclusion Filter
- * Evaluates whether a CAPEX transaction row is included in manual tracking
+ * Checks whether a row represents internal labor / internal hours / internal function
+ * based on the conversion rules and SAP conventions.
+ * These are strictly excluded from Planisware manual external spend entries.
+ */
+export function isInternalHoursOrCost(row: {
+  nameDescription?: string;
+  costElemDesc?: string;
+  costElement?: string;
+  rawVendor?: string;
+  normalizedVendor?: string;
+}): boolean {
+  const ce = String(row.costElement || '').trim();
+  // Known internal labor / internal services / intercompany cost elements
+  if (ce === '6133000035' || ce === '7200000000' || ce === '6405000000' || ce === '7405000000') {
+    return true;
+  }
+
+  const rawText = `${row.nameDescription || ''} ${row.costElemDesc || ''} ${row.rawVendor || ''} ${row.normalizedVendor || ''}`.toLowerCase();
+
+  const internalKeywords = [
+    'business solution',
+    'it business solutions',
+    'data & automation',
+    'it data & automation',
+    'core services',
+    'it core services',
+    'core finance',
+    'finance r&c',
+    'manufacturing',
+    'app mandays',
+    'techn mandays',
+    'internal mandays',
+    'internal hours',
+    'reclass internal',
+    'internal labor',
+    'internal labour',
+    'internal time',
+    'mandays',
+    'man days',
+    'opex to capex',
+    'france payroll',
+    'costs of alok',
+    'digital performance lead',
+    '(internal)',
+    'own production',
+    'etex engineering fees',
+    'sadikul islam',
+    'jelle leenknegt',
+    'product delivery lead',
+    'reclass flexso',
+    'ic-technical assistance',
+    'ic oth oper chgs',
+  ];
+
+  for (const kw of internalKeywords) {
+    if (rawText.includes(kw)) {
+      if (kw === 'core finance' && rawText.includes('core finance may 2026')) {
+        continue;
+      }
+      return true;
+    }
+  }
+
+  if (/erp\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4}/i.test(rawText)) {
+    return true;
+  }
+
+  return false;
+}
+
+export const CONFIRMED_EXTERNAL_VENDORS = [
+  'DELOITTE',
+  'ERNST & YOUNG',
+  'PLANISWARE',
+  'DSR GLOBAL',
+  'COGNIZANT',
+  'IO BELGIUM',
+  'COSTS IO',
+  'IO COSTS',
+  'IO COST',
+  'BMATIX',
+  'FIS CAPITAL',
+  'BROWSER LONDON',
+  'VIVIDKRAFT',
+  'DUALOOP',
+  'TEAM4P',
+  'EDICOM',
+  'SERRALA',
+  'FORYOUANDYOURCUSTOMERS',
+  'FYAYC',
+  'ROCKWELL',
+  'APVINE',
+  'COMPUTACENTER',
+  'THEVALUECHAIN',
+  'TRANSPOREON',
+  'DATATUNE',
+  'SAP BELGIUM',
+  'SEEBURGER',
+  'SOTERICS',
+  'ANAPLAN',
+  'EPI USE',
+  'SYSARB',
+  'FLEXSO',
+  'ASPOSE',
+  'PERIPASS',
+  'HIRCUNUS',
+  'FINGERFOOD',
+  'FOUBERT IJS',
+  'SILTECH',
+  'TEKST AI',
+  'AVVALE',
+  'STIBO SYSTEMS',
+  'ECE CVBA',
+  'VONAGE',
+  'TAGETIK',
+  '703 FINANCE',
+  'INVOICE PLM',
+  'TRAVEL COSTS',
+  'TRAVEL DRIES',
+  '(EXTERNAL)',
+  'MCKINSEY',
+];
+
+/**
+ * Manual Cost Inclusion Filter
+ * Evaluates whether a transaction row is a valid external vendor cost
  */
 export function includeManualCapex(row: {
   docDate?: string;
@@ -51,45 +175,38 @@ export function includeManualCapex(row: {
   nameDescription?: string;
   costElement?: string;
   costElemDesc?: string;
+  purchasingDoc?: string;
+  normalizedVendor?: string;
 }): boolean {
+  if (isInternalHoursOrCost(row)) {
+    return false;
+  }
+
   const rawName = String(row.nameDescription || '');
   const normName = normalizeNamePattern(rawName).toLowerCase();
-  const description = String(row.costElemDesc || '').toLowerCase();
-  const costElem = String(row.costElement || '').trim();
-  const amount = row.valueObjectCurr;
+  const amount = Number(row.valueObjectCurr) || 0;
   const hasDate = Boolean((row.docDate || '').trim() || (row.postingDate || '').trim());
+  const hasPo = Boolean((row.purchasingDoc || '').trim());
 
   const isTransfer =
     normName.includes('reclass') ||
     normName.includes('correction') ||
     rawName.toLowerCase().includes('reclass') ||
-    rawName.toLowerCase().includes('correction');
+    rawName.toLowerCase().includes('correction') ||
+    rawName.toUpperCase().startsWith('WBS O') ||
+    rawName.toUpperCase().startsWith('WBS N') ||
+    rawName.toUpperCase().startsWith('WBS C') ||
+    (row.normalizedVendor && row.normalizedVendor.toUpperCase().startsWith('WBS '));
 
-  const isEngineering =
-    normName.includes('engineering') ||
-    rawName.toLowerCase().includes('engineering');
-
-  const isInternalTime =
-    normName.includes('internal') ||
-    normName.includes('mandays') ||
-    normName.includes('man days') ||
-    normName.includes('opex to capex') ||
-    costElem === '6133000035' ||
-    costElem === '7200000000';
-
-  const isIntercompany =
-    costElem === '7405000000' ||
-    costElem === '6405000000' ||
-    description.startsWith('ic-') ||
-    description.startsWith('ic ');
-
-  if (!hasDate || amount <= 0 || isTransfer) {
+  if (isTransfer) {
     return false;
   }
-  if (isEngineering) {
-    return true;
+
+  if (!hasDate && !hasPo) {
+    return false;
   }
-  return !isInternalTime && !isIntercompany;
+
+  return amount !== 0;
 }
 
 /**
@@ -128,14 +245,6 @@ export function normalizeVendor(
     return { rawVendor, normalizedVendor: 'ROCKWELL AUTOMATION', isUnknown: false };
   }
 
-  if (
-    upperRaw.includes('ENGINEERING FEES') ||
-    upperRaw.includes('ETEX ENGINEERING') ||
-    (upperRaw.includes('ENGINEERING') && !upperRaw.includes('INTERNAL'))
-  ) {
-    return { rawVendor, normalizedVendor: 'Etex Engineering Fees', isUnknown: false };
-  }
-
   if (upperRaw.includes('TAGETIK')) {
     return { rawVendor, normalizedVendor: 'Tagetik Subscription', isUnknown: false };
   }
@@ -159,19 +268,30 @@ export function normalizeVendor(
 }
 
 /**
- * Classifies a row based on CJI3 business rules
+ * Classifies a row based on CJI3 business rules and conversion past rules
  */
 export function classifyRow(
   purchasingDoc: string | undefined,
   nameDesc: string | undefined,
-  costElemDesc: string | undefined
+  costElemDesc: string | undefined,
+  costElement?: string,
+  rawVendor?: string
 ): CostClassification {
   const colJ = (nameDesc || '').trim();
   const colM = (costElemDesc || '').trim();
-  const fullText = `${colJ} ${colM}`.toUpperCase();
+  const rawV = (rawVendor || '').trim();
+  const costElem = (costElement || '').trim();
+  const fullText = `${colJ} ${colM} ${rawV}`.toUpperCase();
 
-  // 1. Internal reclassification
-  if (fullText.includes('RECLASS INTERNAL HOURS') || fullText.includes('INTERNAL HOURS')) {
+  // 1. Internal labor, internal hours, IT Business solutions, and internal reclasses
+  if (
+    isInternalHoursOrCost({
+      nameDescription: colJ,
+      costElemDesc: colM,
+      costElement: costElem,
+      rawVendor: rawV,
+    })
+  ) {
     return 'INTERNAL_RECLASS';
   }
 
@@ -189,6 +309,11 @@ export function classifyRow(
 
   // 3. External vendor cost
   if (purchasingDoc && purchasingDoc.trim() !== '') {
+    return 'EXTERNAL_VENDOR';
+  }
+
+  const isExt = CONFIRMED_EXTERNAL_VENDORS.some((v) => fullText.includes(v));
+  if (isExt) {
     return 'EXTERNAL_VENDOR';
   }
 
@@ -330,7 +455,7 @@ export function parseCJI3Excel(
     }
 
     // Classification
-    const classification = classifyRow(purchasingDoc, nameDescription, costElemDesc);
+    const classification = classifyRow(purchasingDoc, nameDescription, costElemDesc, costElement, rawVendor);
 
     if (classification === 'EXTERNAL_VENDOR') {
       vendorSet.add(normalizedVendor);
@@ -386,8 +511,8 @@ export function parseCJI3Excel(
       isExcluded = true;
       exclusionReason = 'Correction / transfer classification';
     } else if (
-      (wbs === 'O7941/2517' && Math.abs(valueObjectCurr - 28141.3) < 0.01 && (fromPeriod === '7' || fromPeriod === '07')) ||
-      (wbs === 'O7941/2613' && Math.abs(valueObjectCurr - 28141.3) < 0.01 && (fromPeriod === '7' || fromPeriod === '07')) ||
+      (wbs === 'O7941/2517' && Math.abs(Math.abs(valueObjectCurr) - 28141.3) < 0.01 && (fromPeriod === '7' || fromPeriod === '07')) ||
+      (wbs === 'O7941/2613' && Math.abs(Math.abs(valueObjectCurr) - 28141.3) < 0.01 && (fromPeriod === '7' || fromPeriod === '07')) ||
       (sourceRow === 124 && wbs === 'O7941/2517') ||
       (sourceRow === 313 && wbs === 'O7941/2613') ||
       (sourceRow === 132 && wbs === 'O7941/2517') ||

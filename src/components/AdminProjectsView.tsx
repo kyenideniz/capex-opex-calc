@@ -24,6 +24,7 @@ interface AdminProjectsViewProps {
   onOpenVendorManager: () => void;
   onOpenUploadModal: () => void;
   onViewTransactions: (wbs: string) => void;
+  onOpenPlaniswareModal?: () => void;
 }
 
 export const AdminProjectsView: React.FC<AdminProjectsViewProps> = ({
@@ -35,7 +36,9 @@ export const AdminProjectsView: React.FC<AdminProjectsViewProps> = ({
   onOpenVendorManager,
   onOpenUploadModal,
   onViewTransactions,
+  onOpenPlaniswareModal,
 }) => {
+
   const [editingWbs, setEditingWbs] = useState<string | null>(null);
   const [editPmId, setEditPmId] = useState<string>('');
   const [editBudget, setEditBudget] = useState<string>('');
@@ -100,6 +103,16 @@ export const AdminProjectsView: React.FC<AdminProjectsViewProps> = ({
 
         {/* Global Admin Tools */}
         <div className="flex items-center space-x-2">
+          {onOpenPlaniswareModal && (
+            <button
+              onClick={onOpenPlaniswareModal}
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-white" />
+              <span>Planisware Source Mapping</span>
+            </button>
+          )}
+
           <button
             onClick={onOpenVendorManager}
             className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer"
@@ -108,6 +121,7 @@ export const AdminProjectsView: React.FC<AdminProjectsViewProps> = ({
             <span>Vendor Aliases</span>
           </button>
         </div>
+
       </div>
 
       {/* Overview WBS Projects Table */}

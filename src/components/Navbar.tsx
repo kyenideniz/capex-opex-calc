@@ -1,6 +1,6 @@
 import React from 'react';
 import { User } from '../types';
-import { FileSpreadsheet, FlaskConical, ShieldCheck, UserCheck, Download } from 'lucide-react';
+import { FileSpreadsheet, FlaskConical } from 'lucide-react';
 
 interface NavbarProps {
   users: User[];
@@ -29,7 +29,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   onTabChange,
 }) => {
-  const months = ['2026-08', '2026-09', '2026-10', '2026-11', '2026-12'];
+  const months = [
+    { id: '2026-10', label: '2026-10 (Through Oct 31)' },
+    { id: '2026-09', label: '2026-09 (September)' },
+    { id: '2026-08', label: '2026-08 (August)' },
+  ];
 
   return (
     <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 shadow-xs">
@@ -43,7 +47,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
             <div>
               <span className="font-bold text-base tracking-tight text-white block">Planisware Actuals</span>
-              <span className="text-xs text-slate-400 font-medium block">Monthly CJI3 Engine</span>
+              <span className="text-xs text-slate-400 font-medium block">Monthly CJI3 Maintenance Engine</span>
             </div>
           </div>
 
@@ -75,15 +79,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center space-x-3">
             {/* Reporting Month Selector */}
             <div className="flex items-center space-x-1.5 bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700 text-xs">
-              <span className="text-slate-400 font-medium">Month:</span>
+              <span className="text-slate-400 font-medium">Reporting:</span>
               <select
                 value={selectedMonth}
                 onChange={(e) => onChangeMonth(e.target.value)}
                 className="bg-transparent text-white font-bold focus:outline-none cursor-pointer"
               >
                 {months.map((m) => (
-                  <option key={m} value={m} className="bg-slate-900 text-white">
-                    {m} {m === '2026-08' ? '(M1)' : m === '2026-09' ? '(M2)' : ''}
+                  <option key={m.id} value={m.id} className="bg-slate-900 text-white">
+                    {m.label}
                   </option>
                 ))}
               </select>
@@ -92,7 +96,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Upload CJI3 Button */}
             <button
               onClick={onOpenUploadModal}
-              className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-1.5 rounded-xl shadow-xs transition flex items-center space-x-1.5"
+              className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-1.5 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>Upload / Load File</span>
@@ -102,7 +106,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-xl border border-slate-700 text-xs">
               <button
                 onClick={() => onTabChange('pm')}
-                className={`px-2.5 py-1 font-semibold rounded-lg transition ${
+                className={`px-2.5 py-1 font-semibold rounded-lg transition cursor-pointer ${
                   activeTab === 'pm' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
@@ -111,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {currentUser.role === 'admin' && (
                 <button
                   onClick={() => onTabChange('admin')}
-                  className={`px-2.5 py-1 font-semibold rounded-lg transition ${
+                  className={`px-2.5 py-1 font-semibold rounded-lg transition cursor-pointer ${
                     activeTab === 'admin' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -123,7 +127,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Test Runner */}
             <button
               onClick={onOpenTestRunner}
-              className="bg-purple-950/80 hover:bg-purple-900 text-purple-200 border border-purple-800 text-xs font-semibold px-2.5 py-1.5 rounded-xl transition flex items-center space-x-1"
+              className="bg-purple-950/80 hover:bg-purple-900 text-purple-200 border border-purple-800 text-xs font-semibold px-2.5 py-1.5 rounded-xl transition flex items-center space-x-1 cursor-pointer"
               title="Run Automated Tests"
             >
               <FlaskConical className="w-3.5 h-3.5 text-purple-400" />
